@@ -133,16 +133,26 @@
     { id: "35+", label: "35+", hint: "Droog, herkenbaar, eerder naar huis mag." },
   ];
 
+  let MEMES = [
+    { id: "m01", name: "Jurk!", video: "https://www.youtube.com/watch?v=lsTMQ3SGF_g", sips: 2 },
+    { id: "m02", name: "Links, rechts en kaas", video: "https://www.youtube.com/shorts/R6PMfdyWxdQ", sips: 2 },
+    { id: "m03", name: "Okay, let's go", video: "https://www.youtube.com/watch?v=AWM5ZNdWlqw", sips: 2 },
+    { id: "m04", name: "Op je muil, gauw", video: "https://www.youtube.com/watch?v=rbV5WlxusAc", sips: 2 },
+    { id: "m05", name: "Turbo Polyp", video: "https://www.youtube.com/watch?v=xb0-7XOYDxg", sips: 2 },
+  ];
+
   const GAMES = [
     { id: "rad", name: "Het Rad", tag: "Makkelijk", time: "± 10 min", blurb: "Draai aan het rad en doe wat het vakje zegt. Soms drink je, soms wijs je iemand aan." },
     { id: "vragen", name: "Vragenvuur", tag: "Vragen", time: "± 15 min", blurb: "Een vraag voor één iemand. Antwoorden mag. Twee slokken nemen ook." },
     { id: "kaarten", name: "Hoger of Lager", tag: "Kaarten", time: "± 10 min", blurb: "Raad of de volgende kaart hoger of lager is. Fout is twee slokken." },
+    { id: "memes", name: "Memes", tag: "Foto", time: "± 10 min", blurb: "Je ziet een foto. Ken je het filmpje, dan deel je slokken uit. Weet je het niet, dan drink je zelf." },
   ];
 
   const RULES = {
     rad: { title: "Het Rad", lines: ["Je draait om de beurt.", "Doe wat het vakje zegt. De tekst eronder legt het uit.", "Links en rechts volgen de namen, met de klok mee.", "De teller telt alleen slokken die het spel aanwijst. Bij waterval en thema tel je zelf.", "Eén slok is genoeg. Niemand hoeft leeg te drinken."] },
     vragen: { title: "Vragenvuur", lines: ["Lees de vraag hardop.", "Geef antwoord, of neem 2 slokken en sla de vraag over.", "Bij ‘wijs aan’ wijs je iemand aan tafel aan.", "Pittig is plagerig. Sla over als je niet wilt."] },
     kaarten: { title: "Hoger of Lager", lines: ["Je ziet een kaart. Raad of de volgende hoger of lager is.", "Aas is het hoogst, daarna heer, vrouw en boer.", "Goed: niemand drinkt. Fout: jij neemt 2 slokken. Dezelfde waarde: iedereen 1.", "Daarna is de nieuwe kaart de startkaart."] },
+    memes: { title: "Memes", lines: ["Je ziet een foto, niet het filmpje.", "Weet je het, zeg het hardop en tik Verteld. Dan zie je het antwoord.", "Weet je het niet, dan drink je zelf en zie je het antwoord ook."] },
   };
 
   const SUITS = [
@@ -170,9 +180,11 @@
     conn: "off",
     error: "",
     sound: true,
+    authReady: false,
     admin: false,
     adminToken: "",
     questionsRev: 0,
+    memesRev: 0,
     audio: null,
     token: "",
     account: null,
@@ -186,7 +198,11 @@
       filter: "mix",
       age: "20-25",
       authName: "",
+      authEmail: "",
       authPass: "",
+      authHint: "",
+      pendingEmail: "",
+      previewLink: "",
       groupName: "",
       groupCode: "",
       customQ: "",
@@ -209,6 +225,7 @@
       turnKey: "",
       spinLock: false,
       editId: "",
+      adminTab: "vragen",
       timerInt: null,
       timerLeft: 0,
       revealTimer: null,
@@ -301,7 +318,7 @@
     return { id, name: cleanName(p.name, "Speler"), icon: validIcon(p.icon), color: validColor(p.color), sips: Math.max(0, Math.min(999, p.sips | 0)) };
   }
   function normalizeGame(g) {
-    if (!g || !["rad", "vragen", "kaarten"].includes(g.id)) return null;
+    if (!g || !["rad", "vragen", "kaarten", "memes"].includes(g.id)) return null;
     if (g.id === "rad") {
       const extraWheel = normalizeExtraWheel(g.extraWheel);
       const known = g.spin && g.spin.id;
@@ -345,6 +362,31 @@
         filter,
         age,
         custom,
+      };
+    }
+    if (g.id === "memes") {
+      const memes = Array.isArray(g.memes) ? g.memes.filter((m) => m && m.id && m.name && m.video).slice(0, 40).map((m) => ({
+        id: String(m.id).slice(0, 20),
+        name: String(m.name).slice(0, 40),
+        video: String(m.video).slice(0, 300),
+        sips: Math.max(1, Math.min(4, m.sips | 0 || 2)),
+      })) : [];
+      const known = new Set(memes.map((m) => m.id));
+      let order = Array.isArray(g.order) ? g.order.map((id) => String(id)).filter((id) => known.has(id)).slice(0, 40) : [];
+      if (!order.length) order = memes.map((m) => m.id);
+      const stages = ["watch", "tell", "give", "result"];
+      return {
+        id: "memes",
+        turn: g.turn | 0,
+        order,
+        cursor: order.length ? Math.max(0, Math.min(order.length - 1, g.cursor | 0)) : 0,
+        round: Math.max(1, g.round | 0 || 1),
+        stage: g.stage === "give" ? "tell" : (stages.includes(g.stage) ? g.stage : "watch"),
+        note: g.note === "know" || g.note === "miss" ? g.note : null,
+        targetId: g.targetId ? String(g.targetId).slice(0, 40) : null,
+        memes,
+        missed: Array.isArray(g.missed) ? g.missed.map((n) => String(n).slice(0, 40)).slice(-30) : [],
+        answers: Array.isArray(g.answers) ? g.answers.map((n) => String(n).slice(0, 40)).filter(Boolean).slice(-40) : [],
       };
     }
     let deck = Array.isArray(g.deck) ? g.deck.filter((c) => c && c.r >= 2 && c.r <= 14 && c.s >= 0 && c.s <= 3).slice(0, 52) : [];
@@ -439,6 +481,15 @@
       if (!ids.length) ids = QUESTIONS.filter((q) => age !== "16-18" || q.cat !== "pittig").map((q) => q.id);
       return { id, turn, order: shuffle(ids), cursor: 0, round: 1, stage: "ask", note: null, filter, age, custom };
     }
+    if (id === "memes") {
+      const memes = (MEMES.length ? MEMES : [{ id: "m01", name: "Jurk!", video: "https://www.youtube.com/watch?v=lsTMQ3SGF_g", sips: 2 }]).slice(0, 40).map((m) => ({
+        id: String(m.id),
+        name: String(m.name).slice(0, 40),
+        video: String(m.video).slice(0, 300),
+        sips: Math.max(1, Math.min(4, m.sips | 0 || 2)),
+      }));
+      return { id: "memes", turn, order: shuffle(memes.map((m) => m.id)), cursor: 0, round: 1, stage: "watch", note: null, targetId: null, memes };
+    }
     return { id: "kaarten", turn, deck: makeDeck(), index: 0, stage: "guess", guess: null, outcome: null, banner: "" };
   }
   function sipPlan(state) {
@@ -503,6 +554,24 @@
     }
     return { ...state, players, game };
   }
+  function answerName(g) {
+    const meme = g && (g.memes || []).find((m) => m.id === g.order[g.cursor]);
+    return meme && meme.name ? String(meme.name).slice(0, 40) : "";
+  }
+  function keepAnswer(g) {
+    const name = answerName(g);
+    const answers = (g.answers || []).concat(name ? [name] : []).slice(-40);
+    return { ...g, answers };
+  }
+  function nextMeme(state) {
+    const g = state.game;
+    const n = state.players.length || 1;
+    let order = g.order.slice();
+    let cursor = g.cursor + 1;
+    let round = g.round || 1;
+    if (cursor >= order.length) { order = shuffle(order); cursor = 0; round += 1; }
+    return { ...g, order, cursor, round, stage: "watch", note: null, targetId: null, turn: (g.turn + 1) % n };
+  }
   function skipTurn(state) {
     if (!state.game || !state.players.length) return null;
     const n = state.players.length;
@@ -516,6 +585,7 @@
       if (cursor >= order.length) { order = shuffle(order); cursor = 0; round += 1; }
       return { ...state, game: { ...g, order, cursor, round, stage: "ask", note: null, turn } };
     }
+    if (g.id === "memes") return { ...state, game: nextMeme({ ...state, game: keepAnswer(g) }) };
     let deck = g.deck;
     let index = g.index;
     let banner = g.banner || "";
@@ -656,6 +726,31 @@
           return old ? { ...p, sips: old.sips } : p;
         });
         return { ...state, players, phase: snap.game ? "play" : state.phase, game: snap.game, history: history.slice(0, -1) };
+      }
+      case "meme-miss": {
+        const g = state.game;
+        if (!g || g.id !== "memes" || g.stage !== "watch" || !actorOk(state, action)) return null;
+        const meme = (g.memes || []).find((m) => m.id === g.order[g.cursor]);
+        const sips = meme ? meme.sips : 2;
+        const players = state.players.map((p) => ({ ...p }));
+        if (players[g.turn]) players[g.turn].sips = Math.min(999, players[g.turn].sips + sips);
+        const missed = (g.missed || []).concat(meme && meme.name ? [String(meme.name).slice(0, 40)] : []).slice(-30);
+        return remember(state, { ...state, players, game: { ...keepAnswer(g), stage: "result", note: "miss", targetId: null, missed } });
+      }
+      case "meme-know": {
+        const g = state.game;
+        if (!g || g.id !== "memes" || g.stage !== "watch" || !actorOk(state, action)) return null;
+        return { ...state, game: { ...g, stage: "tell", note: "know", targetId: null } };
+      }
+      case "meme-told": {
+        const g = state.game;
+        if (!g || g.id !== "memes" || g.stage !== "tell" || !actorOk(state, action)) return null;
+        return remember(state, { ...state, game: { ...keepAnswer(g), stage: "result", note: "know", targetId: null } });
+      }
+      case "meme-next": {
+        const g = state.game;
+        if (!g || g.id !== "memes" || g.stage !== "result" || !actorOk(state, action)) return null;
+        return remember(state, { ...state, game: nextMeme(state) });
       }
       case "skip":
         if (action.by !== state.hostId) return null;
@@ -902,6 +997,7 @@
     app.joinTimer = setInterval(pump, 1600);
   }
   async function createRoom() {
+    if (needFriendsAccount()) return;
     const token = ++app.op;
     const seeded = app._groupPlayers;
     app._groupPlayers = null;
@@ -934,6 +1030,7 @@
     render();
   }
   async function joinRoom(raw) {
+    if (needFriendsAccount()) return;
     const norm = normalizeCode(raw);
     if (norm.code.length !== 4) {
       toast(norm.bad ? "Die code klopt niet. Er zit geen O, I, 0 of 1 in." : "Vul de code van 4 tekens in.");
@@ -991,6 +1088,33 @@
     if (app.state.phase !== "closed") startJoinLoop();
     render();
   }
+  function noteEveningMissed() {
+    const g = app.state && app.state.game;
+    const names = (g && g.missed) || [];
+    const have = new Set(app.eveningMissed || []);
+    names.forEach((n) => { if (n) have.add(n); });
+    app.eveningMissed = [...have];
+  }
+  function noteEveningAnswers() {
+    const g = app.state && app.state.game;
+    const have = app.eveningAnswers || [];
+    if (!g || g.id !== "memes") { app.eveningAnswers = have.slice(); return; }
+    const current = g.stage === "result" ? "" : answerName(g);
+    const names = (g.answers || []).concat(current ? [current] : []);
+    const seen = new Set();
+    app.eveningAnswers = have.concat(names).filter((n) => n && !seen.has(n) && seen.add(n));
+  }
+  function buildRecap() {
+    noteEveningMissed();
+    noteEveningAnswers();
+    if (!app.state || !(app.state.players || []).length) return null;
+    const players = app.state.players.map((p) => ({ name: p.name, sips: p.sips | 0, icon: p.icon, color: p.color })).sort((a, b) => b.sips - a.sips);
+    const missed = (app.eveningMissed || []).slice();
+    const answers = (app.eveningAnswers || []).slice();
+    const games = (app.eveningGames || []).slice();
+    if (!players.some((p) => p.sips > 0) && !missed.length && !answers.length && !games.length) return null;
+    return { players, missed, answers, games };
+  }
   function noteEveningQuestions() {
     const g = app.state && app.state.game;
     if (!g || g.id !== "vragen") return;
@@ -1015,9 +1139,15 @@
   }
   function finishLeave() {
     noteEveningQuestions();
+    noteEveningMissed();
+    noteEveningAnswers();
+    const recap = buildRecap();
     saveEvening();
     app.eveningGames = [];
     app.eveningQuestions = [];
+    app.eveningMissed = [];
+    app.eveningAnswers = [];
+    app.recap = recap;
     app.op++;
     net.attempt++;
     if (net.cancelConn) { const c = net.cancelConn; net.cancelConn = null; c(); }
@@ -1039,7 +1169,7 @@
     app.conn = "off";
     app.error = "";
     app.overlay = null;
-    app.screen = "home";
+    app.screen = recap ? "recap" : "home";
     app.ui.stale = false;
     app.ui.noRoom = false;
     app.ui.confirmLeave = false;
@@ -1236,6 +1366,18 @@
     if (data.groups) app.groups = data.groups;
     app.overlay = null;
   }
+  function applyMemes(list) {
+    if (!Array.isArray(list) || !list.length) return;
+    const clean = list.filter((m) => m && m.id && m.name && m.video).map((m) => ({
+      id: String(m.id),
+      name: String(m.name).slice(0, 40),
+      video: String(m.video).slice(0, 300),
+      sips: Math.max(1, Math.min(4, m.sips | 0 || 2)),
+    }));
+    if (!clean.length) return;
+    MEMES = clean;
+    app.memesRev += 1;
+  }
   function applyQuestions(list) {
     if (!Array.isArray(list) || !list.length) return;
     const clean = list.filter((q) => q && q.id && q.text).map((q) => ({
@@ -1248,6 +1390,19 @@
     if (!clean.length) return;
     QUESTIONS = clean;
     app.questionsRev += 1;
+  }
+  function removeMeme(id) {
+    if (!id || !confirm("Deze meme weghalen?")) return;
+    api("/api/admin/memes/" + encodeURIComponent(id), { method: "DELETE", admin: true })
+      .then((data) => {
+        applyMemes(data.memes);
+        if (app.ui.editId === id) app.ui.editId = "";
+        render();
+      })
+      .catch((err) => {
+        if (/beheerder/.test(err.message)) { dropAdmin(); render(); }
+        toast(err.message);
+      });
   }
   function removeQuestion(id) {
     if (!id || !confirm("Deze vraag weghalen?")) return;
@@ -1273,7 +1428,15 @@
       const savedAdmin = sessionStorage.getItem("maatje.admin") || "";
       if (savedAdmin) { app.adminToken = savedAdmin; app.admin = true; }
     } catch (e) {}
-    return api("/api/config").then((cfg) => {
+    const verifyToken = new URLSearchParams(location.search).get("verify") || "";
+    const verified = verifyToken
+      ? api("/api/verify", { method: "POST", body: { token: verifyToken } }).then((data) => {
+          setSession(data);
+          try { history.replaceState({}, "", location.pathname); } catch (err) {}
+          toast("E-mail bevestigd. Je kunt nu met een code spelen.");
+        }).catch((err) => toast(err.message))
+      : Promise.resolve();
+    return verified.then(() => api("/api/config")).then((cfg) => {
       app.config = cfg || { googleClientId: "" };
       if (app.config.googleClientId) loadGoogle();
       if (!app.token) return null;
@@ -1281,7 +1444,8 @@
     }).catch(() => {
       if (app.token) { app.token = ""; localStorage.removeItem("maatje.token"); }
     }).then(() => api("/api/questions").then((data) => applyQuestions(data && data.questions)).catch(() => {}))
-      .then(() => render());
+      .then(() => api("/api/memes").then((data) => applyMemes(data && data.memes)).catch(() => {}))
+      .then(() => { app.authReady = true; render(); });
   }
   function loadGoogle() {
     if (window.google || document.getElementById("googleSdk")) return;
@@ -1307,16 +1471,50 @@
       .then((data) => { setSession(data); toast("Ingelogd met Google"); render(); })
       .catch((err) => toast(err.message));
   }
+  function showCheckMail(email, previewLink) {
+    app.overlay = "login";
+    app.ui.authMode = "check-mail";
+    app.ui.pendingEmail = email || "";
+    app.ui.previewLink = previewLink || "";
+    render();
+  }
   function authSubmit(register) {
     const nameEl = document.getElementById("authName");
+    const emailEl = document.getElementById("authEmail");
     const passEl = document.getElementById("authPass");
     if (nameEl) app.ui.authName = nameEl.value;
+    if (emailEl) app.ui.authEmail = emailEl.value;
     if (passEl) app.ui.authPass = passEl.value;
     const name = app.ui.authName || "";
+    const email = app.ui.authEmail || "";
     const password = app.ui.authPass || "";
-    api(register ? "/api/register" : "/api/login", { method: "POST", body: { name, password } })
-      .then((data) => { setSession(data); app.ui.authPass = ""; toast(register ? "Account gemaakt" : "Welkom terug"); render(); })
-      .catch((err) => toast(err.message));
+    const body = register ? { name, email, password } : { name, email: name, password };
+    api(register ? "/api/register" : "/api/login", { method: "POST", body })
+      .then((data) => {
+        app.ui.authPass = "";
+        app.error = "";
+        if (data.pending) { showCheckMail(data.email, data.previewLink); return; }
+        setSession(data);
+        app.ui.authHint = "";
+        toast(data.user && data.user.verified === false ? "Ingelogd. Bevestig je mail om met een code te spelen." : "Welkom terug");
+        render();
+      })
+      .catch((err) => { app.error = err.message; toast(err.message); render(); });
+  }
+  function needFriendsAccount() {
+    if (location.protocol === "file:") return false;
+    if (!app.account) {
+      app.overlay = "login";
+      app.ui.authMode = "login";
+      app.ui.authHint = "Met vrienden via een code heb je een account nodig. Kijken en op één telefoon spelen mag zonder.";
+      render();
+      return true;
+    }
+    if (app.account.verified === false) {
+      showCheckMail(app.account.email, app.ui.previewLink);
+      return true;
+    }
+    return false;
   }
   function logout() {
     const token = app.token;
@@ -1327,6 +1525,7 @@
     localStorage.removeItem("maatje.token");
     if (token) api("/api/logout", { method: "POST" }).catch(() => {});
     app.screen = "home";
+    app.overlay = null;
     render();
   }
   function linkGroupRoom(groupId, code) {
@@ -1367,10 +1566,20 @@
   }
   function loginHtml() {
     if (app.overlay !== "login") return "";
-    const google = app.config.googleClientId
-      ? `<div id="googleSlot"></div><p class="or">of met een naam</p>`
-      : `<p class="note">Google zet je aan door een client-id in config.json te zetten. Met een naam en wachtwoord kun je nu al een account maken.</p>`;
-    return `<div class="modal" data-act="close-login"><div class="panel auth" data-act="stop" role="dialog" aria-modal="true"><h3>${app.ui.authMode === "register" ? "Account maken" : "Inloggen"}</h3><p class="fine">Je naam, pictogram en groepen blijven op deze computer staan.</p><form data-act="${app.ui.authMode === "register" ? "register" : "login-form"}" class="auth-grid"><label class="field">Naam<input id="authName" maxlength="16" autocomplete="username" value="${esc(app.ui.authName || "")}"></label><label class="field">Wachtwoord<input id="authPass" type="password" maxlength="64" autocomplete="${app.ui.authMode === "register" ? "new-password" : "current-password"}" value="${esc(app.ui.authPass || "")}"></label><button class="btn btn-primary" type="submit">${app.ui.authMode === "register" ? "Account maken" : "Inloggen"}</button></form>${google}<button type="button" class="btn btn-text" data-act="auth-toggle">${app.ui.authMode === "register" ? "Ik heb al een account" : "Nog geen account"}</button><button type="button" class="btn btn-ghost" data-act="close-login">Sluiten</button></div></div>`;
+    if (app.ui.authMode === "check-mail") {
+      const link = app.ui.previewLink
+        ? `<p class="fine">Er is nog geen mailserver ingesteld in config.json. Tot die tijd bevestig je via deze link:</p><p class="fine"><a href="${esc(app.ui.previewLink)}">${esc(app.ui.previewLink)}</a></p>`
+        : `<p class="fine">Open de mail op ${esc(app.ui.pendingEmail || "je adres")}. Kijk ook in spam.</p>`;
+      return `<div class="modal" data-act="close-login"><div class="panel auth" data-act="stop" role="dialog" aria-modal="true"><h3>Check je mail</h3><p class="fine">Klik de link in de mail. Daarna kun je met een code spelen.</p>${link}<button type="button" class="btn btn-primary" data-act="resend-mail">Stuur opnieuw</button><button type="button" class="btn btn-text" data-act="login">Naar inloggen</button><button type="button" class="btn btn-ghost" data-act="close-login">Sluiten</button></div></div>`;
+    }
+    const reg = app.ui.authMode === "register";
+    const google = !reg && app.config.googleClientId
+      ? `<div id="googleSlot"></div><p class="or">of met e-mail</p>`
+      : (!reg ? `<p class="note">Google zet je aan door een client-id in config.json te zetten.</p>` : "");
+    const hint = app.ui.authHint || (reg ? "Je krijgt een mail om het adres te bevestigen." : "Kijken en op één telefoon spelen mag zonder account.");
+    const emailField = reg ? `<label class="field">E-mail<input id="authEmail" type="email" maxlength="80" autocomplete="email" value="${esc(app.ui.authEmail || "")}"></label>` : "";
+    const err = app.error ? `<p class="fine">${esc(app.error)}</p>` : "";
+    return `<div class="modal" data-act="close-login"><div class="panel auth" data-act="stop" role="dialog" aria-modal="true"><h3>${reg ? "Account maken" : "Inloggen"}</h3><p class="fine">${esc(hint)}</p><form data-act="${reg ? "register" : "login-form"}" class="auth-grid"><label class="field">${reg ? "Naam" : "E-mail of naam"}<input id="authName" maxlength="80" autocomplete="username" value="${esc(app.ui.authName || "")}"></label>${emailField}<label class="field">Wachtwoord<input id="authPass" type="password" maxlength="64" autocomplete="${reg ? "new-password" : "current-password"}" value="${esc(app.ui.authPass || "")}"></label><button class="btn btn-primary" type="button" data-act="${reg ? "do-register" : "do-login"}">${reg ? "Account maken" : "Inloggen"}</button></form>${err}${google}<button type="button" class="btn btn-text" data-act="auth-toggle">${reg ? "Ik heb al een account" : "Nog geen account"}</button><button type="button" class="btn btn-ghost" data-act="close-login">Sluiten</button></div></div>`;
   }
   function groupTile(g) {
     const members = g.members || [];
@@ -1396,7 +1605,7 @@
   }
   function groupExtras(g) {
     const months = ["jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "okt", "nov", "dec"];
-    const names = { rad: "Het Rad", vragen: "Vragenvuur", kaarten: "Kaarten" };
+    const names = { rad: "Het Rad", vragen: "Vragenvuur", kaarten: "Kaarten", memes: "Memes" };
     const whoLabel = { self: "jij", all: "iedereen", left: "links", right: "rechts", give: "iemand kiezen", none: "niemand" };
     const evenings = (g.evenings || []).slice().reverse().map((e) => {
       const d = new Date(e.at || 0);
@@ -1425,7 +1634,7 @@
   function drawSettings() {
     const d = app.draft || app.profile || { name: "", icon: "glass", color: "blue" };
     const theme = app.theme || "dark";
-    return `<div class="wrap">${topbar()}<div class="set-head"><button type="button" class="btn btn-text" data-act="settings-back">‹ Terug</button><div><p class="kicker">Instellingen</p><h2>Jouw voorkeuren</h2></div></div><div class="set-grid"><section class="set-card"><p class="label">Avatar</p><div class="you-pill" style="--c:${colorHex(d.color)}"><span class="mini-ico">${iconSvg(d.icon)}</span><strong id="settingsPreview">${esc(cleanName(d.name, "") || "Jouw naam")}</strong></div><p class="fine">Kies een pictogram en een kleur.</p><label class="field">Naam<input id="settingsName" maxlength="16" value="${esc(d.name || "")}" autocomplete="off" spellcheck="false"></label><p class="label">Pictogram</p><div class="icons">${ICONS.map((ic) => `<button type="button" class="ico ${d.icon === ic.id ? "is-on" : ""}" data-act="pick-icon" data-id="${ic.id}" aria-label="${ic.label}" aria-pressed="${d.icon === ic.id}">${ic.svg}</button>`).join("")}</div><p class="label">Kleur</p><div class="swatches">${COLORS.map((c) => `<button type="button" class="swatch ${d.color === c.id ? "is-on" : ""}" style="--c:${c.hex}" data-act="pick-color" data-id="${c.id}" aria-label="${c.label}" aria-pressed="${d.color === c.id}"></button>`).join("")}</div></section><section class="set-card"><p class="label">Thema</p><div class="seg">${[["system", "Systeem"], ["dark", "Donker"], ["light", "Licht"]].map(([id, label]) => `<button type="button" class="${theme === id ? "is-on" : ""}" data-act="theme" data-theme="${id}">${label}</button>`).join("")}</div><button type="button" class="set-row" data-act="sound"><span>Geluid</span><strong>${app.sound ? "Aan" : "Uit"}</strong></button><p class="label">Leeftijd voor vragen</p>${ageChips()}<p class="fine">${esc((AGES.find((a) => a.id === app.ui.age) || AGES[2]).hint)}</p><button type="button" class="set-row" data-act="admin"><span>Vragen</span><strong>Beheren</strong></button><button type="button" class="set-row" data-act="${app.account ? "groups" : "login"}"><span>${app.account ? "Groepen" : "Account"}</span><strong>${app.account ? esc(app.account.name) : "Inloggen"}</strong></button>${app.account ? `<button type="button" class="set-row" data-act="logout"><span>Uitloggen</span><strong></strong></button>` : ""}</section></div></div>`;
+    return `<div class="wrap">${topbar()}<div class="set-head"><button type="button" class="btn btn-text" data-act="settings-back">‹ Terug</button><div><p class="kicker">Instellingen</p><h2>Jouw voorkeuren</h2></div></div><div class="set-grid"><section class="set-card"><p class="label">Avatar</p><div class="you-pill" style="--c:${colorHex(d.color)}"><span class="mini-ico">${iconSvg(d.icon)}</span><strong id="settingsPreview">${esc(cleanName(d.name, "") || "Jouw naam")}</strong></div><p class="fine">Kies een pictogram en een kleur.</p><label class="field">Naam<input id="settingsName" maxlength="16" value="${esc(d.name || "")}" autocomplete="off" spellcheck="false"></label><p class="label">Pictogram</p><div class="icons">${ICONS.map((ic) => `<button type="button" class="ico ${d.icon === ic.id ? "is-on" : ""}" data-act="pick-icon" data-id="${ic.id}" aria-label="${ic.label}" aria-pressed="${d.icon === ic.id}">${ic.svg}</button>`).join("")}</div><p class="label">Kleur</p><div class="swatches">${COLORS.map((c) => `<button type="button" class="swatch ${d.color === c.id ? "is-on" : ""}" style="--c:${c.hex}" data-act="pick-color" data-id="${c.id}" aria-label="${c.label}" aria-pressed="${d.color === c.id}"></button>`).join("")}</div></section><section class="set-card"><p class="label">Thema</p><div class="seg">${[["system", "Systeem"], ["dark", "Donker"], ["light", "Licht"]].map(([id, label]) => `<button type="button" class="${theme === id ? "is-on" : ""}" data-act="theme" data-theme="${id}">${label}</button>`).join("")}</div><button type="button" class="set-row" data-act="sound"><span>Geluid</span><strong>${app.sound ? "Aan" : "Uit"}</strong></button><p class="label">Leeftijd voor vragen</p>${ageChips()}<p class="fine">${esc((AGES.find((a) => a.id === app.ui.age) || AGES[2]).hint)}</p><button type="button" class="set-row" data-act="admin" data-tab="vragen"><span>Vragen</span><strong>Beheren</strong></button><button type="button" class="set-row" data-act="admin" data-tab="memes"><span>Memes</span><strong>Beheren</strong></button><button type="button" class="set-row" data-act="${app.account ? "groups" : "login"}"><span>${app.account ? "Groepen" : "Account"}</span><strong>${app.account ? esc(app.account.name) : "Inloggen"}</strong></button>${app.account ? `<button type="button" class="set-row" data-act="logout"><span>Uitloggen</span><strong></strong></button>` : ""}</section></div></div>`;
   }
   function ageChecks(selected) {
     const set = new Set(selected && selected.length ? selected : AGES.map((a) => a.id));
@@ -1436,17 +1645,33 @@
     const kind = q ? q.kind : "say";
     return `<form data-act="save-question" class="set-card"><input type="hidden" id="qId" value="${q ? esc(q.id) : ""}"><label class="field">Vraag<textarea id="qText" maxlength="180" rows="3" required>${q ? esc(q.text) : ""}</textarea></label><label class="field">Soort<select id="qCat"><option value="licht" ${cat === "licht" ? "selected" : ""}>Licht</option><option value="groep" ${cat === "groep" ? "selected" : ""}>Groep</option><option value="pittig" ${cat === "pittig" ? "selected" : ""}>Pittig</option></select></label><label class="field">Wat je doet<select id="qKind"><option value="say" ${kind !== "point" ? "selected" : ""}>Vertellen</option><option value="point" ${kind === "point" ? "selected" : ""}>Wijs aan</option></select></label><p class="label">Leeftijden</p>${ageChecks(q ? q.ages : null)}<p class="fine">Pittig komt nooit bij 16–18.</p><div class="stack"><button class="btn btn-primary" type="submit">${q ? "Opslaan" : "Toevoegen"}</button><button type="button" class="btn btn-text" data-act="cancel-edit">Annuleren</button></div></form>`;
   }
+  function memeEditor(m) {
+    const own = m && String(m.video).startsWith("/media/");
+    return `<form data-act="save-meme" class="set-card"><input type="hidden" id="mId" value="${m ? esc(m.id) : ""}"><input type="hidden" id="mKeep" value="${own ? esc(m.video) : ""}"><label class="field">Naam van de meme<input id="mName" maxlength="40" value="${m ? esc(m.name) : ""}" placeholder="Jurk!" required></label><label class="field">YouTube-link<input id="mVideo" maxlength="300" value="${m && !own ? esc(m.video) : ""}" placeholder="https://www.youtube.com/watch?v=..."></label><label class="field">Of upload een foto<span class="file-row"><input id="mFile" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"><span class="file-btn">Kies een foto</span><span id="mFileName">Geen bestand</span></span></label><label class="field">Slokken<input id="mSips" type="number" min="1" max="4" value="${m ? m.sips : 2}"></label><p class="fine">${own ? "Er staat al een eigen foto. Upload een nieuwe om hem te vervangen. " : ""}Jpg, png of webp, max 8 MB. Bij een YouTube-link pakt het spel zelf een stil beeld. De naam blijft verborgen tot iemand het niet weet.</p><div class="stack"><button class="btn btn-primary" type="submit">${m ? "Opslaan" : "Toevoegen"}</button><button type="button" class="btn btn-text" data-act="cancel-edit">Annuleren</button></div></form>`;
+  }
+  function adminTabs() {
+    const tab = app.ui.adminTab || "vragen";
+    return `<div class="seg">${[["vragen", "Vragen"], ["memes", "Memes"]].map(([id, label]) => `<button type="button" class="${tab === id ? "is-on" : ""}" data-act="admin-tab" data-tab="${id}">${label}</button>`).join("")}</div>`;
+  }
   function drawAdmin() {
     if (!app.admin) {
-      return `<div class="wrap">${topbar()}<div class="set-head"><button type="button" class="btn btn-text" data-act="admin-back">‹ Terug</button><div><p class="kicker">Beheer</p><h2>Vragen</h2></div></div><section class="set-card"><p class="fine">Het wachtwoord staat in config.json bij adminPassword.</p><form data-act="admin-login" class="auth-grid"><label class="field">Wachtwoord<input id="adminPass" type="password" maxlength="64" autocomplete="current-password" required></label><button class="btn btn-primary" type="submit">Openen</button></form>${app.error ? `<p class="fine">${esc(app.error)}</p>` : ""}</section></div>`;
+      return `<div class="wrap">${topbar()}<div class="set-head"><button type="button" class="btn btn-text" data-act="admin-back">‹ Terug</button><div><p class="kicker">Beheer</p><h2>Vragen en memes</h2></div></div><section class="set-card"><p class="fine">Gebruikersnaam en wachtwoord staan in config.json als adminUser en adminPassword.</p><form data-act="admin-login" class="auth-grid"><label class="field">Gebruikersnaam<input id="adminUser" maxlength="32" autocomplete="username" required></label><label class="field">Wachtwoord<input id="adminPass" type="password" maxlength="64" autocomplete="current-password" required></label><button class="btn btn-primary" type="submit">Openen</button></form>${app.error ? `<p class="fine">${esc(app.error)}</p>` : ""}</section></div>`;
+    }
+    const tab = app.ui.adminTab || "vragen";
+    if (tab === "memes") {
+      const editing = app.ui.editId && app.ui.editId !== "new" ? MEMES.find((m) => m.id === app.ui.editId) : null;
+      const form = app.ui.editId ? memeEditor(editing || null) : `<button type="button" class="btn btn-primary" data-act="new-meme">Nieuwe meme</button>`;
+      const rows = MEMES.map((m) => `<article class="q-row"><div><strong>${esc(m.name)}</strong><small>${esc(String(m.video).startsWith("/media/") ? "eigen foto" : m.video)} · ${m.sips} ${m.sips === 1 ? "slok" : "slokken"}</small></div><div class="q-actions"><button type="button" class="btn btn-ghost" data-act="edit-meme" data-id="${esc(m.id)}">Aanpassen</button><button type="button" class="btn btn-ghost" data-act="delete-meme" data-id="${esc(m.id)}">Weg</button></div></article>`).join("");
+      return `<div class="wrap">${topbar()}<div class="set-head"><button type="button" class="btn btn-text" data-act="admin-back">‹ Terug</button><div><p class="kicker">Beheer</p><h2>${MEMES.length} memes</h2></div></div>${adminTabs()}${form}<div class="q-admin">${rows}</div><button type="button" class="btn btn-text" data-act="admin-logout">Beheer sluiten</button></div>`;
     }
     const editing = app.ui.editId && app.ui.editId !== "new" ? QUESTIONS.find((q) => q.id === app.ui.editId) : null;
     const form = app.ui.editId ? questionEditor(editing || null) : `<button type="button" class="btn btn-primary" data-act="new-question">Nieuwe vraag</button>`;
     const rows = QUESTIONS.map((q) => `<article class="q-row"><div><strong>${esc(q.text)}</strong><small>${esc({ licht: "Licht", groep: "Groep", pittig: "Pittig" }[q.cat] || q.cat)} · ${q.kind === "point" ? "wijs aan" : "vertel"} · ${esc((q.ages || []).join(", "))}</small></div><div class="q-actions"><button type="button" class="btn btn-ghost" data-act="edit-question" data-id="${esc(q.id)}">Aanpassen</button><button type="button" class="btn btn-ghost" data-act="delete-question" data-id="${esc(q.id)}">Weg</button></div></article>`).join("");
-    return `<div class="wrap">${topbar()}<div class="set-head"><button type="button" class="btn btn-text" data-act="admin-back">‹ Terug</button><div><p class="kicker">Beheer</p><h2>${QUESTIONS.length} vragen</h2></div></div>${form}<div class="q-admin">${rows}</div><button type="button" class="btn btn-text" data-act="admin-logout">Beheer sluiten</button></div>`;
+    return `<div class="wrap">${topbar()}<div class="set-head"><button type="button" class="btn btn-text" data-act="admin-back">‹ Terug</button><div><p class="kicker">Beheer</p><h2>${QUESTIONS.length} vragen</h2></div></div>${adminTabs()}${form}<div class="q-admin">${rows}</div><button type="button" class="btn btn-text" data-act="admin-logout">Beheer sluiten</button></div>`;
   }
   function view() {
     if (app.screen === "settings") return "settings";
+    if (app.screen === "recap") return "recap";
     if (app.screen === "admin") return "admin";
     if (app.overlay === "style") return "style";
     if (app.screen === "groups" && !app.mode) return "groups";
@@ -1505,7 +1730,10 @@
     const code = app.mode === "multi" && app.roomCode
       ? `<button type="button" class="chip-code ${connClass()}" data-act="copy-code"><i></i>${esc(app.roomCode)}</button>`
       : "";
-    return `<header class="bar"><div class="top"><div class="top-left"><button type="button" class="brand" data-act="brand">${logoSvg()}<b>Maatje</b></button></div>${topNav()}<div class="top-actions">${code}<button type="button" class="iconbtn" data-act="sound" aria-label="${app.sound ? "Geluid uit" : "Geluid aan"}">${soundSvg(app.sound)}</button><button type="button" class="iconbtn" data-act="settings" aria-label="Instellingen">${gearSvg()}</button><button type="button" class="you-mini" data-act="style" aria-label="Jouw stijl"><span class="mini-ico" style="color:${colorHex(me.color)}">${iconSvg(me.icon)}</span><strong>${esc(me.name)}</strong></button></div></div></header>`;
+    const sessionBtn = app.account
+      ? `<button type="button" class="bar-logout" data-act="logout">Uitloggen</button>`
+      : `<button type="button" class="bar-logout" data-act="login">Inloggen</button>`;
+    return `<header class="bar"><div class="top"><div class="top-left"><button type="button" class="brand" data-act="brand">${logoSvg()}<b>Maatje</b></button></div>${topNav()}<div class="top-actions">${code}${sessionBtn}<button type="button" class="iconbtn" data-act="sound" aria-label="${app.sound ? "Geluid uit" : "Geluid aan"}">${soundSvg(app.sound)}</button><button type="button" class="iconbtn" data-act="settings" aria-label="Instellingen">${gearSvg()}</button><button type="button" class="you-mini" data-act="style" aria-label="Jouw stijl"><span class="mini-ico" style="color:${colorHex(me.color)}">${iconSvg(me.icon)}</span><strong>${esc(me.name)}</strong></button></div></div></header>`;
   }
   function codeTiles(code) {
     const chars = String(code || "").slice(0, 4).split("");
@@ -1532,20 +1760,39 @@
         rad: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><path d="M12 4v8l5 3"/><path d="M12 2.5V4M12 20v1.5M2.5 12H4M20 12h1.5"/></svg>',
         vragen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 9a4 4 0 1 1 6.3 3.2c-.8.6-1.3 1.1-1.3 2.1"/><path d="M12 18h.01"/></svg>',
         kaarten: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="7" y="3" width="12" height="16" rx="2"/><rect x="4" y="6" width="12" height="16" rx="2"/><path d="M10 14.2c.6-1.3 1.2-1.3 1.8 0 .5 1.1-.9 2-1.8 2.6-.9-.6-2.3-1.5-1.8-2.6.6-1.3 1.2-1.3 1.8 0z"/></svg>',
+        memes: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M10 9.5v5l5-2.5-5-2.5z"/></svg>',
       };
-      return `<article class="gcard g-${g.id}"><span class="mark" aria-hidden="true">${marks[g.id] || ""}</span><span class="tag">${g.tag}</span><h3>${g.name}</h3><p>${g.blurb}</p><span class="meta">${g.time}</span>${filters}${actions}</article>`;
+      const previews = {
+        rad: "img/spel-rad.jpg",
+        vragen: "img/spel-vraag.jpg",
+        kaarten: "img/spel-kaarten.jpg",
+        memes: "img/spel-meme.png",
+      };
+      return `<article class="gcard game-tile g-${g.id}"><div class="ghead"><span class="mark" aria-hidden="true">${marks[g.id] || ""}</span><div><h3>${g.name}</h3><span class="tag">${g.tag} · ${g.time}</span></div></div><div class="gpreview"><img src="${previews[g.id] || ""}" alt=""></div><p>${g.blurb}</p>${filters}${actions ? `<div class="gfoot">${actions}</div>` : ""}</article>`;
     }).join("");
   }
   function homeRules() {
-    const cols = ["rad", "vragen", "kaarten"].map((id) => {
+    const cols = ["rad", "vragen", "kaarten", "memes"].map((id) => {
       const data = RULES[id];
       return `<div class="rule-col"><h3>${esc(data.title)}</h3><ul>${data.lines.map((line) => `<li>${esc(line)}</li>`).join("")}</ul></div>`;
     }).join("");
     return `<section class="home-rules"><p class="kicker">Spelregels</p><h2>Kort en duidelijk.</h2><div class="rule-grid">${cols}</div></section>`;
   }
+  function drawRecap() {
+    const r = app.recap || { players: [], missed: [], games: [] };
+    const topSip = r.players.reduce((max, p) => Math.max(max, p.sips | 0), 0);
+    const leaders = r.players.filter((p) => topSip > 0 && p.sips === topSip);
+    const names = leaders.map((p) => esc(p.name));
+    const who = names.length < 2 ? (names[0] || "") : names.slice(0, -1).join(", ") + " en " + names[names.length - 1];
+    const lead = topSip ? who + (leaders.length === 1 ? " had de meeste slokken." : " hadden de meeste slokken.") : "Niemand heeft gedronken.";
+    const board = r.players.map((p) => `<li class="prow"><span class="ava" style="--c:${colorHex(p.color)}">${iconSvg(p.icon)}</span><span class="who"><b>${esc(p.name)}</b><small>${topSip && p.sips === topSip ? "meeste · " : ""}${sipWord(p.sips)}</small></span></li>`).join("");
+    const answers = (r.answers || []).length ? `<p class="kicker" style="margin-top:22px">Antwoorden</p><ul class="plist">${r.answers.map((n) => `<li class="prow"><span class="who"><b>${esc(n)}</b></span></li>`).join("")}</ul>` : "";
+    const missed = (r.missed || []).length ? `<p class="kicker" style="margin-top:22px">Niet geweten</p><ul class="plist">${r.missed.map((n) => `<li class="prow"><span class="who"><b>${esc(n)}</b></span></li>`).join("")}</ul>` : "";
+    return `<div class="narrow">${topbar()}<p class="kicker">Einde van de avond</p><h2>${lead}</h2><ul class="plist">${board}</ul>${answers}${missed}<div class="stack" style="margin-top:16px"><button type="button" class="btn btn-primary" data-act="recap-done">Klaar</button></div></div>`;
+  }
   function drawHome() {
     const p = app.profile || { name: "Jij", icon: "glass", color: "blue" };
-    return `<div class="wrap">${topbar()}<section class="hero"><div class="hero-copy"><p class="kicker">Drankspelletjes</p><h1>Zet ’m op tafel.</h1><p class="lede">Drie spelletjes die je in een minuut snapt. Eén telefoon doorgeven, of allemaal meedoen met een code.</p><div class="mascot" aria-hidden="true"><div class="m-wheel"></div><div class="m-card"><span>A</span><b>♥</b></div><div class="m-q">?</div></div></div><section class="join"><h2>Aan tafel</h2><p class="muted">Kies hoe jullie spelen.</p><button type="button" class="you-row" data-act="style"><span class="mini-ico" style="color:${colorHex(p.color)}">${iconSvg(p.icon)}</span><span><small>Jij speelt als</small><strong>${esc(p.name)}</strong></span><em>Wijzig</em></button><button type="button" class="btn btn-primary" data-act="local">Eén telefoon</button><p class="or">of samen</p><form data-act="join" class="join-row"><label class="code-field"><span class="sr">Spelcode</span><input id="codeInput" maxlength="8" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Spelcode" value="${esc(app.ui.codeValue || "")}"><span class="slots" id="codeSlots" aria-hidden="true"><i></i><i></i><i></i><i></i></span></label><button class="btn btn-blue" type="submit">Meedoen</button></form><div class="stack" style="margin-top:10px"><button type="button" class="btn btn-ghost" data-act="create">Nieuw spel starten</button></div><p class="fine">Meerdere telefoons hebben internet nodig. Je hoeft niks te kopen. De telefoon die het spel start, blijft aan.</p>${netNote()}</section></section><section class="home-games"><div class="section-head"><p class="kicker">Drie spellen</p><h2>Kies er een.</h2></div><div class="gcards">${gameCards(false)}</div></section>${homeRules()}${homeGroups()}<p class="foot">Alcohol is voor 18+. Drink met mate. Een account is vrijwillig en staat lokaal in een JSON-bestand. Deel een spelcode alleen met je tafel.</p></div>`;
+    return `<div class="wrap">${topbar()}<section class="hero"><div class="hero-copy"><p class="kicker">Drankspelletjes</p><h1>Zet ’m op tafel.</h1><p class="lede">Vier spelletjes die je in een minuut snapt. Eén telefoon doorgeven, of allemaal meedoen met een code.</p><div class="mascot" aria-hidden="true"><div class="m-wheel"></div><div class="m-card"><span>A</span><b>♥</b></div><div class="m-q">?</div></div></div><section class="join"><h2>Aan tafel</h2><p class="muted">Kies hoe jullie spelen.</p><button type="button" class="you-row" data-act="style"><span class="mini-ico" style="color:${colorHex(p.color)}">${iconSvg(p.icon)}</span><span><small>Jij speelt als</small><strong>${esc(p.name)}</strong></span><em>Wijzig</em></button><button type="button" class="btn btn-primary" data-act="local">Eén telefoon</button><p class="or">of samen</p><form data-act="join" class="join-row"><label class="code-field"><span class="sr">Spelcode</span><input id="codeInput" maxlength="8" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Spelcode" value="${esc(app.ui.codeValue || "")}"><span class="slots" id="codeSlots" aria-hidden="true"><i></i><i></i><i></i><i></i></span></label><button class="btn btn-blue" type="submit">Meedoen</button></form><div class="stack" style="margin-top:10px"><button type="button" class="btn btn-ghost" data-act="create">Nieuw spel starten</button></div><p class="fine">Meerdere telefoons hebben internet nodig. Je hoeft niks te kopen. De telefoon die het spel start, blijft aan.</p>${netNote()}</section></section><section class="home-games"><div class="section-head"><p class="kicker">Vier spellen</p><h2>Kies er een.</h2></div><div class="gcards">${gameCards(false)}</div></section>${homeRules()}${homeGroups()}<p class="foot">Alcohol is voor 18+. Drink met mate. Kijken en één telefoon spelen mag zonder account. Met een code heb je een bevestigd e-mailadres nodig. Het account staat lokaal in een JSON-bestand. Deel een spelcode alleen met je tafel.</p></div>`;
   }
   function drawStyle() {
     const d = app.draft || { name: "", icon: "glass", color: "blue" };
@@ -1705,6 +1952,35 @@
     return `<div class="pcard ${suit.red ? "red" : ""} ${extra || ""}" role="img" aria-label="${esc(spoken)}"><span class="corner">${face}<br>${suit.sym}</span><span class="bigsuit">${suit.sym}</span>${word ? `<span class="word">${esc(word)}</span>` : ""}<span class="corner flip">${face}<br>${suit.sym}</span></div>`;
   }
   function cardBack() { return '<div class="pcard back" aria-hidden="true"><span>maatje</span></div>'; }
+  function youtubeId(url) {
+    const hit = String(url || "").match(/(?:youtu\.be\/|youtube(?:-nocookie)?\.com\/(?:watch\?v=|embed\/|shorts\/))([A-Za-z0-9_-]{6,})/);
+    return hit ? hit[1] : "";
+  }
+  function memeById(g, id) {
+    return (g.memes || []).find((m) => m.id === id) || null;
+  }
+  function memeStill(url) {
+    const id = youtubeId(url);
+    const src = id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : (/^(\/media\/memes\/|https:\/\/).+\.(jpe?g|png|webp)(\?|$)/i.test(url) ? url : "");
+    if (!src) return `<p class="fine">Deze foto kan niet worden getoond.</p>`;
+    return `<div class="meme-frame"><img src="${esc(src)}" alt=""></div>`;
+  }
+  function drawMemes() {
+    const g = app.state.game;
+    const meme = memeById(g, g.order[g.cursor]);
+    if (!meme) return `<p>Er zijn geen memes.</p>`;
+    const showName = g.stage === "result";
+    const line = g.stage === "tell"
+      ? "Zeg de meme hardop."
+      : (g.stage === "result" ? (g.note === "miss" ? currentName() + " drinkt " + meme.sips + (meme.sips === 1 ? " slok." : " slokken.") : "Dit was het.") : "Welk filmpje is dit?");
+    let dockBtn = "";
+    if (!myTurn()) dockBtn = `<p class="wait">${esc(currentName())} is aan de beurt, op die telefoon.</p>`;
+    else if (g.stage === "watch") dockBtn = `<div class="pair"><button type="button" class="choice" data-act="meme-know">Ik weet ’m</button><button type="button" class="choice" data-act="meme-miss">Weet ik niet</button></div>`;
+    else if (g.stage === "tell") dockBtn = '<button type="button" class="btn btn-primary" data-act="meme-told">Verteld</button>';
+    else dockBtn = '<button type="button" class="btn btn-primary" data-act="meme-next">Volgende</button>';
+    const answer = showName ? `<p class="meme-line">${esc(line)}</p><h3 class="meme-name">${esc(meme.name)}</h3>` : `<p class="meme-line">${esc(line)}</p>`;
+    return `<article class="qcard meme-card${showName ? " is-answer" : ""}"><div class="eyebrow">Meme ${g.cursor + 1}${g.round > 1 ? " · ronde " + g.round : ""}</div>${answer}${memeStill(meme.video)}</article><div class="dock">${dockBtn}${dockLinks()}</div>`;
+  }
   function drawKaarten() {
     const g = app.state.game;
     const cur = g.deck[g.index];
@@ -1726,7 +2002,7 @@
     const g = app.state.game;
     if (!g) return `<div class="narrow">${topbar()}<p>Het spel is kwijt.</p>${app.isHost || app.mode !== "multi" ? '<button type="button" class="btn btn-primary" data-act="to-lobby">Terug</button>' : ""}</div>`;
     const meta = GAMES.find((x) => x.id === g.id) || GAMES[0];
-    const body = g.id === "rad" ? drawRad() : g.id === "vragen" ? drawVragen() : drawKaarten();
+    const body = g.id === "rad" ? drawRad() : g.id === "vragen" ? drawVragen() : g.id === "memes" ? drawMemes() : drawKaarten();
     const live = `${meta.name}. ${currentName()} is aan de beurt.`;
     return `<div class="narrow">${topbar()}${banners()}<div class="play-head"><div><p class="kicker">${esc(meta.name)}</p><h2>${esc(myTurn() && app.mode === "multi" ? "Jij bent aan de beurt" : currentName())}</h2></div><button type="button" class="btn btn-text" data-act="rules" data-game="${g.id}">Spelregels</button></div>${playerStrip()}${body}<p class="sr">${esc(live)}</p></div>`;
   }
@@ -1746,6 +2022,7 @@
       case "groups": return drawGroups();
       case "group": return drawGroup();
       case "settings": return drawSettings();
+      case "recap": return drawRecap();
       case "admin": return drawAdmin();
       default: return drawHome();
     }
@@ -1761,7 +2038,7 @@
     const s = app.state;
     const g = s && s.game;
     const gameFp = g ? [g.id, g.stage, g.turn, g.spin && g.spin.id, g.targetId, g.choice, g.cursor, g.index, g.outcome, g.note, g.banner, g.category, g.round].join(".") : "";
-    return [view(), app.conn, app.error || "", app.sound ? 1 : 0, app.admin ? 1 : 0, app.questionsRev, app.ui.editId || "", app.ui.noRoom ? 1 : 0, app.ui.stale ? 1 : 0, app.ui.confirmLeave ? 1 : 0, app.ui.rules || "", app.ui.filter || "", app.ui.age || "", app.ui.joinWait || "", app.overlay || "", app.ui.authMode || "", app.screen || "", app.theme || "", app.groupId || "", app.account ? app.account.id : "", (app.groups || []).map((g) => g.id + g.activeRoom + (g.questions || []).length + ":" + (g.segments || []).length + ":" + (g.evenings || []).length).join(","), app.roomCode || "", resultVisible() ? 1 : 0, app.profile ? app.profile.name + app.profile.icon + app.profile.color : "", app.draft ? app.draft.icon + app.draft.color : "", (app.draftPlayers || []).map((p) => p.id + p.icon + p.color).join(","), s ? s.rev + ":" + s.gen + ":" + s.phase + ":" + s.hostId + ":" + s.players.map((p) => p.id + p.name + p.sips + p.icon + p.color).join("/") + ":" + gameFp : ""].join("~");
+    return [view(), app.conn, app.error || "", app.sound ? 1 : 0, app.admin ? 1 : 0, app.questionsRev, app.memesRev, app.ui.adminTab || "", app.ui.editId || "", app.ui.noRoom ? 1 : 0, app.ui.stale ? 1 : 0, app.ui.confirmLeave ? 1 : 0, app.ui.rules || "", app.ui.filter || "", app.ui.age || "", app.ui.joinWait || "", app.overlay || "", app.ui.authMode || "", app.ui.previewLink || "", app.screen || "", app.theme || "", app.groupId || "", app.account ? app.account.id + (app.account.verified === false ? "u" : "v") : "", (app.groups || []).map((g) => g.id + g.activeRoom + (g.questions || []).length + ":" + (g.segments || []).length + ":" + (g.evenings || []).length).join(","), app.roomCode || "", resultVisible() ? 1 : 0, app.profile ? app.profile.name + app.profile.icon + app.profile.color : "", app.draft ? app.draft.icon + app.draft.color : "", (app.draftPlayers || []).map((p) => p.id + p.icon + p.color).join(","), s ? s.rev + ":" + s.gen + ":" + s.phase + ":" + s.hostId + ":" + s.players.map((p) => p.id + p.name + p.sips + p.icon + p.color).join("/") + ":" + gameFp : ""].join("~");
   }
   function captureForm() {
     const a = document.activeElement;
@@ -1825,7 +2102,7 @@
       if (label) label.textContent = app.ui.timerLeft + "s";
     }
     noteMyTurn();
-    const title = app.roomCode ? "Maatje · " + app.roomCode : "Maatje — drankspelletjes";
+    const title = app.roomCode ? "Maatje · " + app.roomCode : "Maatje";
     if (document.title !== title) document.title = title;
   }
 
@@ -1938,6 +2215,7 @@ function addDraft(name) {
     if (!app.state || !app.state.players.length) return;
     if (app.mode === "multi" && !app.isHost) return;
     if (!GAMES.some((g) => g.id === id)) return;
+    if (id === "memes" && !MEMES.length) { toast("Zet eerst een meme in het beheer."); return; }
     app.screen = "play";
     const group = (app.groups || []).find((g) => g.id === app.groupId);
     app.eveningGames = (app.eveningGames || []).concat(id);
@@ -2016,10 +2294,20 @@ function addDraft(name) {
     }
     if (act === "admin") {
       app.screen = "admin";
+      app.ui.adminTab = t.dataset.tab === "memes" ? "memes" : "vragen";
+      app.ui.editId = "";
       app.error = "";
       render();
       return;
     }
+    if (act === "admin-tab") { app.ui.adminTab = t.dataset.tab === "memes" ? "memes" : "vragen"; app.ui.editId = ""; app.error = ""; render(); return; }
+    if (act === "new-meme") { app.ui.editId = "new"; app.error = ""; render(); return; }
+    if (act === "edit-meme") { app.ui.editId = t.dataset.id || ""; app.error = ""; render(); return; }
+    if (act === "delete-meme") { removeMeme(t.dataset.id); return; }
+    if (act === "meme-know") { dispatch({ type: "meme-know" }); return; }
+    if (act === "meme-told") { dispatch({ type: "meme-told" }); return; }
+    if (act === "meme-miss") { dispatch({ type: "meme-miss" }); return; }
+    if (act === "meme-next") { dispatch({ type: "meme-next" }); return; }
     if (act === "admin-back") {
       app.screen = "settings";
       app.ui.editId = "";
@@ -2069,9 +2357,17 @@ function addDraft(name) {
       render();
       return;
     }
-    if (act === "login") { app.overlay = "login"; app.ui.authMode = app.ui.authMode || "login"; render(); return; }
-    if (act === "close-login") { app.overlay = null; render(); return; }
-    if (act === "auth-toggle") { app.ui.authMode = app.ui.authMode === "register" ? "login" : "register"; render(); return; }
+    if (act === "login") { app.overlay = "login"; app.ui.authMode = "login"; app.error = ""; render(); return; }
+    if (act === "do-login") { authSubmit(false); return; }
+    if (act === "do-register") { authSubmit(true); return; }
+    if (act === "close-login") { app.overlay = null; app.ui.authHint = ""; render(); return; }
+    if (act === "resend-mail") {
+      api("/api/resend", { method: "POST", body: { email: app.ui.pendingEmail || "" } })
+        .then((data) => { app.ui.previewLink = data.previewLink || ""; toast(data.mailed ? "Mail opnieuw verstuurd." : "De link staat hieronder."); render(); })
+        .catch((err) => toast(err.message));
+      return;
+    }
+    if (act === "auth-toggle") { app.ui.authMode = app.ui.authMode === "register" ? "login" : "register"; app.error = ""; render(); return; }
     if (act === "groups") {
       if (!app.account) { app.overlay = "login"; render(); return; }
       if (app.mode) { toast("Stop het spel eerst."); return; }
@@ -2145,6 +2441,8 @@ function addDraft(name) {
     if (act === "undo") return dispatch({ type: "undo" });
     if (act === "to-lobby") {
       noteEveningQuestions();
+      noteEveningMissed();
+      noteEveningAnswers();
       if (app.mode === "multi") dispatch({ type: "to-lobby" });
       else if (app.state) { app.state = { ...app.state, phase: "lobby", game: null }; app.screen = "lobby"; render(); }
       return;
@@ -2153,6 +2451,7 @@ function addDraft(name) {
     if (act === "ask-leave") { app.ui.confirmLeave = true; render(); return; }
     if (act === "stay") { app.ui.confirmLeave = false; render(); return; }
     if (act === "leave") return leaveRoom();
+    if (act === "recap-done") { app.recap = null; app.screen = "home"; render(); return; }
     if (act === "go-home") return finishLeave();
     if (act === "claim") return claimHost();
     if (act === "copy-code") {
@@ -2199,6 +2498,7 @@ function addDraft(name) {
     }
     if (t.id === "addPlayer") app.ui.addName = t.value;
     if (t.id === "authName") app.ui.authName = t.value;
+    if (t.id === "authEmail") app.ui.authEmail = t.value;
     if (t.id === "authPass") app.ui.authPass = t.value;
     if (t.id === "groupName") app.ui.groupName = t.value;
     if (t.id === "groupCode") app.ui.groupCode = normalizeCode(t.value).code;
@@ -2241,8 +2541,9 @@ function addDraft(name) {
         .catch((err) => toast(err.message));
     }
     if (form.dataset.act === "admin-login") {
+      const username = (document.getElementById("adminUser") || {}).value || "";
       const pass = (document.getElementById("adminPass") || {}).value || "";
-      api("/api/admin/login", { method: "POST", body: { password: pass } })
+      api("/api/admin/login", { method: "POST", body: { username, password: pass } })
         .then((data) => {
           app.adminToken = data.token;
           app.admin = true;
@@ -2250,6 +2551,38 @@ function addDraft(name) {
           app.error = "";
           render();
         }).catch((err) => { app.error = err.message; render(); });
+    }
+    if (form.dataset.act === "save-meme") {
+      const id = (document.getElementById("mId") || {}).value || "";
+      const fileEl = document.getElementById("mFile");
+      const file = fileEl && fileEl.files && fileEl.files[0];
+      const keep = (document.getElementById("mKeep") || {}).value || "";
+      const body = {
+        name: (document.getElementById("mName") || {}).value || "",
+        video: (document.getElementById("mVideo") || {}).value || keep,
+        sips: Number((document.getElementById("mSips") || {}).value || 2),
+      };
+      const send = () => api(id ? "/api/admin/memes/" + encodeURIComponent(id) : "/api/admin/memes", { method: id ? "PATCH" : "POST", body, admin: true })
+        .then((data) => { applyMemes(data.memes); app.ui.editId = ""; app.error = ""; render(); })
+        .catch((err) => {
+          if (/beheerder/.test(err.message)) { dropAdmin(); render(); }
+          toast(err.message);
+        });
+      if (!file) { send(); return; }
+      if (file.size > 8 * 1024 * 1024) { toast("Foto is te groot. Max 8 MB."); return; }
+      toast("Bezig met uploaden…");
+      const reader = new FileReader();
+      reader.onload = () => {
+        const data = String(reader.result || "").split(",")[1] || "";
+        api("/api/admin/memes/upload", { method: "POST", body: { data }, admin: true })
+          .then((up) => { body.video = up.video; send(); })
+          .catch((err) => {
+            if (/beheerder/.test(err.message)) { dropAdmin(); render(); }
+            toast(err.message);
+          });
+      };
+      reader.onerror = () => toast("Upload mislukt.");
+      reader.readAsDataURL(file);
     }
     if (form.dataset.act === "save-question") {
       const id = (document.getElementById("qId") || {}).value || "";
@@ -2277,7 +2610,7 @@ function addDraft(name) {
   function onKey(e) {
     if (e.key === "Escape") {
       if (app.ui.rules) { app.ui.rules = ""; render(); return; }
-      if (app.overlay === "login") { app.overlay = null; render(); return; }
+      if (app.overlay === "login") { app.overlay = null; app.ui.authHint = ""; render(); return; }
       if (app.ui.confirmLeave) { app.ui.confirmLeave = false; render(); return; }
     }
     if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
@@ -2297,6 +2630,12 @@ function addDraft(name) {
     if (AGES.some((a) => a.id === savedAge)) app.ui.age = savedAge;
     app.root.addEventListener("click", onClick);
     app.root.addEventListener("input", onInput);
+    app.root.addEventListener("change", (e) => {
+      if (!e.target || e.target.id !== "mFile") return;
+      const name = document.getElementById("mFileName");
+      const file = e.target.files && e.target.files[0];
+      if (name) name.textContent = file ? file.name : "Geen bestand";
+    });
     app.root.addEventListener("submit", onSubmit);
     document.addEventListener("keydown", onKey);
     const urlRoom = normalizeCode(new URLSearchParams(location.search).get("room") || "").code;
@@ -2391,6 +2730,14 @@ function addDraft(name) {
     check(answered.players[0].sips === 2 && answered.game.stage === "note", "vraag drinken");
     const nxt = reduce(answered, { type: "next-q", by: "host-0001" });
     check(nxt.game.cursor === 1 && nxt.game.turn === 1 && nxt.game.stage === "ask", "volgende vraag");
+    const memes = base();
+    memes.game = { id: "memes", turn: 0, order: ["m01", "m02"], cursor: 0, round: 1, stage: "watch", note: null, targetId: null, missed: [], memes: [{ id: "m01", name: "Jurk!", video: "https://www.youtube.com/watch?v=lsTMQ3SGF_g", sips: 2 }, { id: "m02", name: "Let's go", video: "https://www.youtube.com/watch?v=xb0-7XOYDxg", sips: 2 }] };
+    const missed = reduce(memes, { type: "meme-miss", by: "host-0001" });
+    check(missed.players[0].sips === 2 && missed.game.stage === "result" && missed.game.missed[0] === "Jurk!", "meme gemist");
+    const told = reduce(reduce(memes, { type: "meme-know", by: "host-0001" }), { type: "meme-told", by: "host-0001" });
+    check(told.game.stage === "result" && told.game.note === "know" && told.game.cursor === 0 && told.game.answers[0] === "Jurk!" && told.players[0].sips === 0, "verteld toont antwoord");
+    const after = reduce(told, { type: "meme-next", by: "host-0001" });
+    check(after.game.stage === "watch" && after.game.cursor === 1 && after.game.note === null, "daarna de volgende");
     const round = normalizeState(spun);
     check(round && round.game.spin.segment === spun.game.spin.segment && round.game.rotation === spun.game.rotation, "staat blijft gelijk");
     console.log("ok", n);

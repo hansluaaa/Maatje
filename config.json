@@ -1,6 +1,46 @@
 {
   "googleClientId": "",
+  "adminUser": "admin",
   "adminPassword": "maatje",
+  "mail": {
+    "host": "",
+    "port": 587,
+    "user": "",
+    "pass": "",
+    "from": ""
+  },
+  "memes": [
+    {
+      "id": "m01",
+      "name": "Jurk!",
+      "video": "https://www.youtube.com/watch?v=lsTMQ3SGF_g",
+      "sips": 2
+    },
+    {
+      "id": "m02",
+      "name": "Links, rechts en kaas",
+      "video": "https://www.youtube.com/shorts/R6PMfdyWxdQ",
+      "sips": 2
+    },
+    {
+      "id": "m03",
+      "name": "Okay, let's go",
+      "video": "https://www.youtube.com/watch?v=AWM5ZNdWlqw",
+      "sips": 2
+    },
+    {
+      "id": "m04",
+      "name": "Op je muil, gauw",
+      "video": "https://www.youtube.com/watch?v=rbV5WlxusAc",
+      "sips": 2
+    },
+    {
+      "id": "m05",
+      "name": "Turbo Polyp",
+      "video": "https://www.youtube.com/watch?v=xb0-7XOYDxg",
+      "sips": 2
+    }
+  ],
   "questions": [
     {
       "id": "q01",

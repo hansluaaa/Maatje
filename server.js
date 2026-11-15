@@ -1,6 +1,8 @@
 /* Maatje: static site plus accounts and groups, stored in data/store.json. */
 const http = require("http");
 const https = require("https");
+const net = require("net");
+const tls = require("tls");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
@@ -15,6 +17,12 @@ const types = {
   ".js": "text/javascript; charset=utf-8",
   ".svg": "image/svg+xml",
   ".json": "application/json",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
   ".ico": "image/x-icon",
 };
 
@@ -30,6 +38,37 @@ const adminTokens = new Set();
 function adminOf(req) {
   const token = String(req.headers["x-admin-token"] || "");
   return token && adminTokens.has(token);
+}
+function cleanVideo(value) {
+  const url = String(value || "").trim().slice(0, 300);
+  if (/^https:\/\/([a-z0-9-]+\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)\//i.test(url)) return url;
+  if (/^https:\/\/.+\.(jpe?g|png|webp)(\?.*)?$/i.test(url)) return url;
+  if (/^\/media\/memes\/[a-z0-9-]+\.(jpe?g|png|webp)$/i.test(url)) return url;
+  return "";
+}
+function cleanMeme(body, id) {
+  const name = String(body.name || "").replace(/[<>]/g, "").replace(/\s+/g, " ").trim().slice(0, 40);
+  const video = cleanVideo(body.video);
+  let sips = Number(body.sips);
+  if (!Number.isFinite(sips)) sips = 2;
+  sips = Math.max(1, Math.min(4, Math.round(sips)));
+  if (name.length < 2) throw new Error("Geef de meme een naam.");
+  if (!video) throw new Error("Plak een YouTube-link of upload een foto.");
+  return { id, name, video, sips };
+}
+function removeMedia(video) {
+  if (!/^\/media\/memes\/[a-z0-9-]+\.(jpe?g|png|webp|mp4|webm)$/i.test(String(video || ""))) return;
+  const file = path.resolve(root, String(video).replace(/^\/+/, ""));
+  const dir = path.resolve(root, "media", "memes");
+  if (file !== dir && file.startsWith(dir + path.sep)) fs.unlink(file, () => {});
+}
+function nextMemeId(list) {
+  let n = 0;
+  list.forEach((m) => {
+    const hit = /^m(\d+)$/.exec(String(m.id || ""));
+    if (hit) n = Math.max(n, Number(hit[1]));
+  });
+  return "m" + (n + 1);
 }
 function cleanQuestion(body, id) {
   const text = String(body.text || "").replace(/[<>]/g, "").replace(/\s+/g, " ").trim().slice(0, 180);
@@ -61,6 +100,19 @@ function saveStore(store) {
   const tmp = storePath + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(store, null, 2));
   fs.renameSync(tmp, storePath);
+}
+function readRaw(req, limit) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > limit) { req.destroy(); reject(new Error("Foto is te groot. Max 8 MB.")); return; }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
 }
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -95,7 +147,123 @@ function tokenOf(req) {
   return m ? m[1] : "";
 }
 function publicUser(user) {
-  return { id: user.id, name: user.name, email: user.email || "", icon: user.icon || "glass", color: user.color || "blue", age: user.age || "20-25", google: !!user.googleSub };
+  return { id: user.id, name: user.name, email: user.email || "", verified: user.verified !== false, icon: user.icon || "glass", color: user.color || "blue", age: user.age || "20-25", google: !!user.googleSub };
+}
+function cleanEmail(value) {
+  const email = String(value || "").trim().toLowerCase().slice(0, 80);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "";
+  return email;
+}
+function originOf(req) {
+  const host = req.headers.host || "localhost:" + port;
+  const proto = req.headers["x-forwarded-proto"] || "http";
+  return proto + "://" + host;
+}
+function mailReady(config) {
+  const mail = config.mail || {};
+  return !!(mail.host && mail.user && mail.pass && mail.from);
+}
+function sendMail(config, message) {
+  const mail = config.mail || {};
+  const portNo = Number(mail.port) || 587;
+  const secure = portNo === 465;
+  return new Promise((resolve, reject) => {
+    let buf = "";
+    let step = 0;
+    let upgraded = secure;
+    let sock;
+    const timer = setTimeout(() => fail(new Error("mail timeout")), 15000);
+    function fail(err) { clearTimeout(timer); try { sock.destroy(); } catch (e) {} reject(err); }
+    function write(line) { sock.write(line + "\r\n"); }
+    function handle(code) {
+      if (step === 0) {
+        if (code >= 400) return fail(new Error("smtp greeting"));
+        write("EHLO maatje"); step = 1; return;
+      }
+      if (step === 1) {
+        if (code >= 400) return fail(new Error("smtp ehlo"));
+        if (!upgraded) { write("STARTTLS"); step = 2; return; }
+        write("AUTH LOGIN"); step = 3; return;
+      }
+      if (step === 2) {
+        if (code !== 220) return fail(new Error("smtp starttls"));
+        sock.removeAllListeners("data");
+        sock.removeAllListeners("error");
+        const plain = sock;
+        sock = tls.connect({ socket: plain, servername: mail.host });
+        upgraded = true;
+        buf = "";
+        sock.on("data", onData);
+        sock.on("error", fail);
+        sock.once("secureConnect", () => { step = 1; write("EHLO maatje"); });
+        return;
+      }
+      if (step === 3) {
+        if (code !== 334) return fail(new Error("smtp auth"));
+        write(Buffer.from(String(mail.user)).toString("base64")); step = 4; return;
+      }
+      if (step === 4) {
+        if (code !== 334) return fail(new Error("smtp user"));
+        write(Buffer.from(String(mail.pass)).toString("base64")); step = 5; return;
+      }
+      if (step === 5) {
+        if (code !== 235) return fail(new Error("smtp wachtwoord"));
+        write("MAIL FROM:<" + mail.from + ">"); step = 6; return;
+      }
+      if (step === 6) {
+        if (code >= 400) return fail(new Error("smtp from"));
+        write("RCPT TO:<" + message.to + ">"); step = 7; return;
+      }
+      if (step === 7) {
+        if (code >= 400) return fail(new Error("smtp to"));
+        write("DATA"); step = 8; return;
+      }
+      if (step === 8) {
+        if (code !== 354) return fail(new Error("smtp data"));
+        const text = String(message.text || "").replace(/^\./gm, "..");
+        sock.write([
+          "From: Maatje <" + mail.from + ">",
+          "To: <" + message.to + ">",
+          "Subject: " + message.subject,
+          "MIME-Version: 1.0",
+          "Content-Type: text/plain; charset=utf-8",
+          "",
+          text,
+          ".",
+          "",
+        ].join("\r\n"));
+        step = 9;
+        return;
+      }
+      if (step === 9) {
+        if (code >= 400) return fail(new Error("smtp send"));
+        write("QUIT");
+        clearTimeout(timer);
+        resolve();
+      }
+    }
+    function onData(chunk) {
+      buf += chunk.toString("utf8");
+      let idx;
+      while ((idx = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, idx).replace(/\r$/, "");
+        buf = buf.slice(idx + 1);
+        if (line.length < 4 || line[3] === "-") continue;
+        const code = Number(line.slice(0, 3));
+        if (code) handle(code);
+      }
+    }
+    sock = secure ? tls.connect({ host: mail.host, port: portNo, servername: mail.host }) : net.connect(portNo, mail.host);
+    sock.on("data", onData);
+    sock.on("error", fail);
+  });
+}
+async function deliverVerify(config, req, user) {
+  const link = originOf(req) + "/?verify=" + user.verifyToken;
+  const text = "Hoi " + user.name + ",\n\nBevestig je e-mail voor Maatje via deze link:\n" + link + "\n\nDaarna kun je met vrienden meedoen via een code. Kijken en op één telefoon spelen kon al zonder account.\n";
+  if (!mailReady(config)) return { mailed: false, previewLink: link };
+  await sendMail(config, { to: user.email, subject: "Bevestig je mail voor Maatje", text });
+  return { mailed: true, previewLink: "" };
 }
 function publicGroup(group) {
   return {
@@ -209,11 +377,17 @@ async function handleApi(req, res, url) {
     send(res, 200, { questions: Array.isArray(config.questions) ? config.questions : [] });
     return;
   }
+  if (req.method === "GET" && pathName === "/api/memes") {
+    send(res, 200, { memes: Array.isArray(config.memes) ? config.memes : [] });
+    return;
+  }
   if (req.method === "POST" && pathName === "/api/admin/login") {
     const body = await readBody(req);
+    const expectedUser = String(config.adminUser || "admin").trim();
     const expected = String(config.adminPassword || "");
-    if (!expected || String(body.password || "") !== expected) {
-      send(res, 401, { error: "Verkeerd wachtwoord." });
+    const username = String(body.username || "").trim();
+    if (!expected || username !== expectedUser || String(body.password || "") !== expected) {
+      send(res, 401, { error: "Verkeerde gegevens." });
       return;
     }
     const token = crypto.randomBytes(24).toString("hex");
@@ -254,6 +428,61 @@ async function handleApi(req, res, url) {
     send(res, 405, { error: "Niet toegestaan" });
     return;
   }
+  if (req.method === "POST" && pathName === "/api/admin/memes/upload") {
+    if (!adminOf(req)) { send(res, 401, { error: "Niet als beheerder ingelogd." }); return; }
+    const raw = await readRaw(req, 12 * 1024 * 1024);
+    let body = {};
+    try { body = JSON.parse(raw.toString("utf8")); } catch (e) { throw new Error("Upload mislukt."); }
+    const buf = Buffer.from(String(body.data || ""), "base64");
+    if (buf.length < 100 || buf.length > 8 * 1024 * 1024) throw new Error("Foto is te groot of leeg. Max 8 MB.");
+    const isJpeg = buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+    const isPng = buf.length > 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
+    const isWebp = buf.length > 12 && buf.slice(0, 4).toString() === "RIFF" && buf.slice(8, 12).toString() === "WEBP";
+    if (!isJpeg && !isPng && !isWebp) throw new Error("Alleen jpg, png of webp.");
+    const ext = isJpeg ? "jpg" : (isPng ? "png" : "webp");
+    const id = "clip-" + crypto.randomBytes(6).toString("hex");
+    const dir = path.join(root, "media", "memes");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, id + "." + ext), buf);
+    send(res, 200, { video: "/media/memes/" + id + "." + ext });
+    return;
+  }
+  if (pathName === "/api/admin/memes" || pathName.startsWith("/api/admin/memes/")) {
+    if (!adminOf(req)) { send(res, 401, { error: "Niet als beheerder ingelogd." }); return; }
+    const list = Array.isArray(config.memes) ? config.memes.slice() : [];
+    if (req.method === "POST" && pathName === "/api/admin/memes") {
+      const meme = cleanMeme(await readBody(req), nextMemeId(list));
+      list.push(meme);
+      config.memes = list;
+      saveConfig(config);
+      send(res, 200, { memes: list, meme });
+      return;
+    }
+    const memeMatch = /^\/api\/admin\/memes\/(m\d+)$/.exec(pathName);
+    if (!memeMatch) { send(res, 404, { error: "Niet gevonden" }); return; }
+    const memeIdx = list.findIndex((m) => m.id === memeMatch[1]);
+    if (memeIdx < 0) { send(res, 404, { error: "Meme niet gevonden" }); return; }
+    if (req.method === "PATCH") {
+      const prev = list[memeIdx].video;
+      list[memeIdx] = cleanMeme(await readBody(req), memeMatch[1]);
+      if (prev !== list[memeIdx].video) removeMedia(prev);
+      config.memes = list;
+      saveConfig(config);
+      send(res, 200, { memes: list });
+      return;
+    }
+    if (req.method === "DELETE") {
+      if (list.length < 2) throw new Error("Laat minstens één meme staan.");
+      removeMedia(list[memeIdx].video);
+      list.splice(memeIdx, 1);
+      config.memes = list;
+      saveConfig(config);
+      send(res, 200, { memes: list });
+      return;
+    }
+    send(res, 405, { error: "Niet toegestaan" });
+    return;
+  }
   if (req.method === "GET" && pathName === "/api/me") {
     if (!me) { send(res, 401, { error: "Niet ingelogd" }); return; }
     const groups = store.groups.filter((g) => (g.members || []).some((m) => m.userId === me.id)).map(publicGroup);
@@ -268,19 +497,25 @@ async function handleApi(req, res, url) {
     if (password.length < 4) throw new Error("Kies een wachtwoord van minstens 4 tekens.");
     if (store.users.some((u) => u.name.toLowerCase() === name.toLowerCase())) throw new Error("Die naam is al bezet.");
     const pw = hashPassword(password);
-    const user = { id: crypto.randomUUID(), name, passwordHash: pw.hash, passwordSalt: pw.salt, email: "", googleSub: "", icon: "glass", color: "blue", age: "20-25", createdAt: Date.now() };
+    const email = cleanEmail(body.email);
+    if (!email) throw new Error("Vul een echt e-mailadres in.");
+    if (store.users.some((u) => u.email && u.email.toLowerCase() === email)) throw new Error("Dat e-mailadres is al gebruikt.");
+    const user = { id: crypto.randomUUID(), name, passwordHash: pw.hash, passwordSalt: pw.salt, email, verified: false, verifyToken: crypto.randomBytes(24).toString("hex"), googleSub: "", icon: "glass", color: "blue", age: "20-25", createdAt: Date.now() };
     store.users.push(user);
-    const token = issueSession(store, user.id);
+    let delivery;
+    try { delivery = await deliverVerify(config, req, user); }
+    catch (err) { delivery = { mailed: false, previewLink: originOf(req) + "/?verify=" + user.verifyToken, mailError: err.message }; }
     saveStore(store);
-    send(res, 200, { token, user: publicUser(user), groups: [] });
+    send(res, 200, { pending: true, email, mailed: !!delivery.mailed, previewLink: delivery.previewLink || "", mailError: delivery.mailError || "" });
     return;
   }
   if (req.method === "POST" && pathName === "/api/login") {
     const body = await readBody(req);
-    const name = cleanName(body.name);
+    const loginId = String(body.email || body.name || "").trim().toLowerCase();
+    const name = cleanName(body.name || body.email);
     const password = String(body.password || "");
-    const user = store.users.find((u) => u.name.toLowerCase() === name.toLowerCase() && u.passwordHash);
-    if (!user) throw new Error("Geen account met die naam.");
+    const user = store.users.find((u) => u.passwordHash && ((u.email && u.email.toLowerCase() === loginId) || u.name.toLowerCase() === name.toLowerCase()));
+    if (!user) throw new Error(loginId.includes("@") ? "Geen account met dat e-mailadres. Log in met je naam, of maak een account." : "Geen account met die naam.");
     const check = hashPassword(password, user.passwordSalt);
     const a = Buffer.from(check.hash, "hex");
     const b = Buffer.from(user.passwordHash, "hex");
@@ -303,13 +538,40 @@ async function handleApi(req, res, url) {
       const base = name;
       let n = 2;
       while (store.users.some((u) => u.name.toLowerCase() === name.toLowerCase())) name = (base + n).slice(0, 16), n += 1;
-      user = { id: crypto.randomUUID(), name, passwordHash: "", passwordSalt: "", email: info.email || "", googleSub: info.sub, icon: "glass", color: "blue", age: "20-25", createdAt: Date.now() };
+      user = { id: crypto.randomUUID(), name, passwordHash: "", passwordSalt: "", email: info.email || "", verified: true, googleSub: info.sub, icon: "glass", color: "blue", age: "20-25", createdAt: Date.now() };
       store.users.push(user);
     } else if (!user.googleSub) user.googleSub = info.sub;
+    user.verified = true;
     const token = issueSession(store, user.id);
     saveStore(store);
     const groups = store.groups.filter((g) => (g.members || []).some((m) => m.userId === user.id)).map(publicGroup);
     send(res, 200, { token, user: publicUser(user), groups });
+    return;
+  }
+  if (req.method === "POST" && pathName === "/api/verify") {
+    const body = await readBody(req);
+    const token = String(body.token || "");
+    const user = store.users.find((u) => u.verifyToken && u.verifyToken === token);
+    if (!user) throw new Error("Deze link is niet meer geldig. Vraag een nieuwe mail aan.");
+    user.verified = true;
+    user.verifyToken = "";
+    const session = issueSession(store, user.id);
+    saveStore(store);
+    const groups = store.groups.filter((g) => (g.members || []).some((m) => m.userId === user.id)).map(publicGroup);
+    send(res, 200, { token: session, user: publicUser(user), groups });
+    return;
+  }
+  if (req.method === "POST" && pathName === "/api/resend") {
+    const body = await readBody(req);
+    const email = cleanEmail(body.email);
+    const user = email && store.users.find((u) => u.email === email && u.verified === false);
+    if (!user) { send(res, 200, { ok: true, mailed: false }); return; }
+    user.verifyToken = crypto.randomBytes(24).toString("hex");
+    let delivery = { mailed: false, previewLink: "" };
+    try { delivery = await deliverVerify(config, req, user); }
+    catch (err) { delivery = { mailed: false, previewLink: originOf(req) + "/?verify=" + user.verifyToken }; }
+    saveStore(store);
+    send(res, 200, { ok: true, mailed: !!delivery.mailed, previewLink: delivery.previewLink || "" });
     return;
   }
   if (req.method === "POST" && pathName === "/api/logout") {
