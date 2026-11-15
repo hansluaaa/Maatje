@@ -22,6 +22,33 @@ function loadConfig() {
   try { return JSON.parse(fs.readFileSync(configPath, "utf8")); }
   catch (e) { return { googleClientId: "" }; }
 }
+function saveConfig(cfg) {
+  fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
+}
+const AGE_IDS = ["16-18", "18-20", "20-25", "25-35", "35+"];
+const adminTokens = new Set();
+function adminOf(req) {
+  const token = String(req.headers["x-admin-token"] || "");
+  return token && adminTokens.has(token);
+}
+function cleanQuestion(body, id) {
+  const text = String(body.text || "").replace(/[<>]/g, "").replace(/\s+/g, " ").trim().slice(0, 180);
+  if (text.length < 8) throw new Error("Vraag is te kort.");
+  const cat = ["licht", "groep", "pittig"].includes(body.cat) ? body.cat : "licht";
+  const kind = body.kind === "point" ? "point" : "say";
+  let ages = Array.isArray(body.ages) ? body.ages.filter((a) => AGE_IDS.includes(a)) : AGE_IDS.slice();
+  if (cat === "pittig") ages = ages.filter((a) => a !== "16-18");
+  if (!ages.length) ages = cat === "pittig" ? AGE_IDS.filter((a) => a !== "16-18") : AGE_IDS.slice();
+  return { id, cat, kind, text, ages };
+}
+function nextQuestionId(list) {
+  let n = 0;
+  list.forEach((q) => {
+    const m = /^q(\d+)$/.exec(String(q.id || ""));
+    if (m) n = Math.max(n, Number(m[1]));
+  });
+  return "q" + (n + 1);
+}
 function emptyStore() { return { users: [], sessions: [], groups: [] }; }
 function loadStore() {
   try {
@@ -83,6 +110,13 @@ function publicGroup(group) {
     activeRoomAt: group.activeRoomAt || 0,
     members: (group.members || []).map((m) => ({ userId: m.userId, name: m.name, icon: m.icon, color: m.color })),
     questions: (group.questions || []).map((q) => ({ id: q.id, text: q.text, by: q.by || "" })),
+    segments: (group.segments || []).map((s) => ({ id: s.id, label: s.label, text: s.text || "", sips: s.sips | 0, who: s.who || "self" })),
+    evenings: (group.evenings || []).slice(-12).map((e) => ({
+      at: e.at || 0,
+      games: e.games || [],
+      players: (e.players || []).map((p) => ({ name: p.name, sips: p.sips | 0 })),
+      questions: e.questions || [],
+    })),
   };
 }
 function userByToken(store, token) {
@@ -148,7 +182,7 @@ const server = http.createServer(async (req, res) => {
   let rel = decodeURIComponent(url.pathname);
   if (rel === "/") rel = "/index.html";
   rel = rel.replace(/^\/+/, "");
-  if (rel === "data" || rel.startsWith("data/") || rel.startsWith("data\\")) {
+  if (rel === "config.json" || rel === "data" || rel.startsWith("data/") || rel.startsWith("data\\")) {
     res.writeHead(404); res.end("niet gevonden"); return;
   }
   const file = path.resolve(root, rel);
@@ -169,6 +203,55 @@ async function handleApi(req, res, url) {
 
   if (req.method === "GET" && pathName === "/api/config") {
     send(res, 200, { googleClientId: config.googleClientId || "" });
+    return;
+  }
+  if (req.method === "GET" && pathName === "/api/questions") {
+    send(res, 200, { questions: Array.isArray(config.questions) ? config.questions : [] });
+    return;
+  }
+  if (req.method === "POST" && pathName === "/api/admin/login") {
+    const body = await readBody(req);
+    const expected = String(config.adminPassword || "");
+    if (!expected || String(body.password || "") !== expected) {
+      send(res, 401, { error: "Verkeerd wachtwoord." });
+      return;
+    }
+    const token = crypto.randomBytes(24).toString("hex");
+    adminTokens.add(token);
+    send(res, 200, { token });
+    return;
+  }
+  if (pathName === "/api/admin/questions" || pathName.startsWith("/api/admin/questions/")) {
+    if (!adminOf(req)) { send(res, 401, { error: "Niet als beheerder ingelogd." }); return; }
+    const list = Array.isArray(config.questions) ? config.questions.slice() : [];
+    if (req.method === "POST" && pathName === "/api/admin/questions") {
+      const q = cleanQuestion(await readBody(req), nextQuestionId(list));
+      list.push(q);
+      config.questions = list;
+      saveConfig(config);
+      send(res, 200, { questions: list, question: q });
+      return;
+    }
+    const match = /^\/api\/admin\/questions\/(q\d+)$/.exec(pathName);
+    if (!match) { send(res, 404, { error: "Niet gevonden" }); return; }
+    const idx = list.findIndex((q) => q.id === match[1]);
+    if (idx < 0) { send(res, 404, { error: "Vraag niet gevonden" }); return; }
+    if (req.method === "PATCH") {
+      list[idx] = cleanQuestion(await readBody(req), match[1]);
+      config.questions = list;
+      saveConfig(config);
+      send(res, 200, { questions: list });
+      return;
+    }
+    if (req.method === "DELETE") {
+      if (list.length < 4) throw new Error("Laat minstens een paar vragen staan.");
+      list.splice(idx, 1);
+      config.questions = list;
+      saveConfig(config);
+      send(res, 200, { questions: list });
+      return;
+    }
+    send(res, 405, { error: "Niet toegestaan" });
     return;
   }
   if (req.method === "GET" && pathName === "/api/me") {
@@ -271,6 +354,8 @@ async function handleApi(req, res, url) {
       activeRoomAt: 0,
       members: [memberFrom(me)],
       questions: [],
+      segments: [],
+      evenings: [],
       createdAt: Date.now(),
     };
     store.groups.push(group);
@@ -292,6 +377,8 @@ async function handleApi(req, res, url) {
 
   const roomMatch = /^\/api\/groups\/([^/]+)\/room$/.exec(pathName);
   const questionMatch = /^\/api\/groups\/([^/]+)\/questions$/.exec(pathName);
+  const segmentMatch = /^\/api\/groups\/([^/]+)\/segments$/.exec(pathName);
+  const eveningMatch = /^\/api\/groups\/([^/]+)\/evenings$/.exec(pathName);
   const oneMatch = /^\/api\/groups\/([^/]+)$/.exec(pathName);
   if (roomMatch && req.method === "POST") {
     const group = store.groups.find((g) => g.id === roomMatch[1]);
@@ -299,6 +386,46 @@ async function handleApi(req, res, url) {
     const body = await readBody(req);
     group.activeRoom = String(body.code || "").toUpperCase().replace(/[^A-Z2-9]/g, "").slice(0, 4);
     group.activeRoomAt = Date.now();
+    saveStore(store);
+    send(res, 200, { group: publicGroup(group) });
+    return;
+  }
+  if (segmentMatch && req.method === "POST") {
+    const group = store.groups.find((g) => g.id === segmentMatch[1]);
+    if (!group || !(group.members || []).some((m) => m.userId === me.id)) throw new Error("Je zit niet in deze groep.");
+    const body = await readBody(req);
+    group.segments = group.segments || [];
+    if (body.remove) {
+      group.segments = group.segments.filter((s) => s.id !== String(body.remove));
+    } else {
+      const label = String(body.label || "").replace(/\s+/g, " ").trim().slice(0, 10);
+      const text = String(body.text || "").replace(/\s+/g, " ").trim().slice(0, 80);
+      const who = ["self", "all", "left", "right", "give", "none"].includes(body.who) ? body.who : "self";
+      if (label.length < 2) throw new Error("Geef het vakje een korte naam.");
+      if (group.segments.length >= 8) throw new Error("Een rad heeft maximaal 8 eigen vakjes.");
+      group.segments.push({ id: "s" + crypto.randomBytes(3).toString("hex"), label, text, who, sips: Math.max(0, Math.min(4, body.sips | 0)) });
+    }
+    saveStore(store);
+    send(res, 200, { group: publicGroup(group) });
+    return;
+  }
+  if (eveningMatch && req.method === "POST") {
+    const group = store.groups.find((g) => g.id === eveningMatch[1]);
+    if (!group || !(group.members || []).some((m) => m.userId === me.id)) throw new Error("Je zit niet in deze groep.");
+    const body = await readBody(req);
+    const players = Array.isArray(body.players) ? body.players.slice(0, 12).map((p) => ({
+      name: cleanName(p.name) || "Speler",
+      sips: Math.max(0, Math.min(999, p.sips | 0)),
+    })) : [];
+    if (!players.length) throw new Error("Geen spelers om te bewaren.");
+    group.evenings = group.evenings || [];
+    group.evenings.push({
+      at: Date.now(),
+      games: Array.isArray(body.games) ? body.games.map((g) => String(g).slice(0, 12)).slice(0, 6) : [],
+      players,
+      questions: Array.isArray(body.questions) ? body.questions.map((q) => String(q).slice(0, 180)).slice(0, 12) : [],
+    });
+    group.evenings = group.evenings.slice(-20);
     saveStore(store);
     send(res, 200, { group: publicGroup(group) });
     return;

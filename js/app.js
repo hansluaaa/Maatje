@@ -54,7 +54,7 @@
 
   const CATEGORIES = ["biermerken", "frisdrank", "films", "series", "hoofdsteden", "snacks", "automerken", "sporten", "apps", "dieren", "landen", "liedjes", "beroepen", "schoolvakken", "ijsjes"];
 
-  const QUESTIONS = [
+  let QUESTIONS = [
     ["q01", "licht", "say", "Wat was het laatste wat je op je telefoon hebt opgezocht?"],
     ["q02", "licht", "say", "Welk nummer zing je mee, terwijl je het eigenlijk niet goed vindt?"],
     ["q03", "licht", "say", "Wat eet je het liefst als je om twee uur nog wakker bent?"],
@@ -170,6 +170,9 @@
     conn: "off",
     error: "",
     sound: true,
+    admin: false,
+    adminToken: "",
+    questionsRev: 0,
     audio: null,
     token: "",
     account: null,
@@ -205,6 +208,7 @@
       scrolled: "",
       turnKey: "",
       spinLock: false,
+      editId: "",
       timerInt: null,
       timerLeft: 0,
       revealTimer: null,
@@ -299,8 +303,9 @@
   function normalizeGame(g) {
     if (!g || !["rad", "vragen", "kaarten"].includes(g.id)) return null;
     if (g.id === "rad") {
+      const extraWheel = normalizeExtraWheel(g.extraWheel);
       const known = g.spin && g.spin.id;
-      const segment = known ? Math.max(0, Math.min(SEGMENTS.length - 1, g.spin.segment | 0)) : 0;
+      const segment = known ? Math.max(0, Math.min(SEGMENTS.length + extraWheel.length - 1, g.spin.segment | 0)) : 0;
       let rotation = Number(g.rotation);
       if (!Number.isFinite(rotation) || rotation < 0) rotation = 0;
       if (rotation > 1e7) rotation = rotation % 360;
@@ -314,6 +319,7 @@
         choice: g.choice === "tell" || g.choice === "drink" ? g.choice : null,
         category: String(g.category || "").slice(0, 40),
         spin,
+        extraWheel,
       };
     }
     if (g.id === "vragen") {
@@ -362,11 +368,58 @@
     const players = s.players.slice(0, 12).map(sanitizePlayer).filter(Boolean);
     const game = phase === "play" ? normalizeGame(s.game) : null;
     if (game && players.length) game.turn = ((game.turn % players.length) + players.length) % players.length;
-    return { v: 1, gen: s.gen | 0, rev: s.rev | 0, hostId: String(s.hostId || "").slice(0, 40), hostBeat: Number(s.hostBeat) || 0, phase, players, game };
+    return { v: 1, gen: s.gen | 0, rev: s.rev | 0, hostId: String(s.hostId || "").slice(0, 40), hostBeat: Number(s.hostBeat) || 0, phase, players, game, history: normalizeHistory(s.history) };
+  }
+  const WHO_IDS = ["self", "all", "left", "right", "give", "none"];
+  const WHO_EMOJI = { self: "✌️", all: "🍻", left: "◀️", right: "▶️", give: "👉", none: "⭐" };
+  function normalizeExtraWheel(list) {
+    if (!Array.isArray(list)) return [];
+    return list.slice(0, 8).map((s, i) => {
+      if (!s || !s.label) return null;
+      const who = WHO_IDS.includes(s.who) ? s.who : "self";
+      const label = String(s.label).replace(/\s+/g, " ").trim().slice(0, 10);
+      if (label.length < 2) return null;
+      return {
+        id: String(s.id || ("c" + i)).replace(/[^\w-]/g, "").slice(0, 20) || ("c" + i),
+        label,
+        text: String(s.text || "").replace(/\s+/g, " ").trim().slice(0, 80),
+        emoji: WHO_EMOJI[who],
+        fg: "#fff",
+        bg: ["#0ea5e9", "#8b5cf6", "#14b8a6", "#6366f1", "#0284c7", "#a855f7", "#2563eb", "#0891b2"][i % 8],
+        needs: who === "give" ? "target" : "",
+        who,
+        sips: Math.max(0, Math.min(4, s.sips | 0)),
+      };
+    }).filter(Boolean);
+  }
+  function normalizeHistory(list) {
+    if (!Array.isArray(list)) return [];
+    return list.slice(-5).map((snap) => {
+      if (!snap || !Array.isArray(snap.players)) return null;
+      return {
+        players: snap.players.slice(0, 12).map((p) => ({ id: String(p.id || "").slice(0, 40), sips: Math.max(0, Math.min(999, p.sips | 0)) })).filter((p) => /^[\w-]{4,40}$/.test(p.id)),
+        game: snap.game ? normalizeGame(snap.game) : null,
+      };
+    }).filter(Boolean);
+  }
+  function wheelOf(g) {
+    const extra = g && Array.isArray(g.extraWheel) ? g.extraWheel : [];
+    return extra.length ? SEGMENTS.concat(extra) : SEGMENTS;
+  }
+  function segmentOf(state) {
+    const g = state && state.game;
+    if (!g || !g.spin) return null;
+    return wheelOf(g)[g.spin.segment] || null;
+  }
+  function remember(state, next) {
+    if (!next) return null;
+    const game = state.game ? JSON.parse(JSON.stringify(state.game)) : null;
+    const snap = { players: state.players.map((p) => ({ id: p.id, sips: p.sips })), game };
+    return { ...next, history: (state.history || []).concat([snap]).slice(-5) };
   }
   function initGame(id, opts, n) {
     const turn = Math.floor(Math.random() * Math.max(1, n));
-    if (id === "rad") return { id, turn, rotation: 0, stage: "ready", spin: null, targetId: null, choice: null, category: "" };
+    if (id === "rad") return { id, turn, rotation: 0, stage: "ready", spin: null, targetId: null, choice: null, category: "", extraWheel: normalizeExtraWheel(opts.segments) };
     if (id === "vragen") {
       const filter = ["licht", "groep", "pittig", "mix"].includes(opts.filter) ? opts.filter : "mix";
       const age = AGES.some((a) => a.id === opts.age) ? opts.age : "20-25";
@@ -390,11 +443,23 @@
   }
   function sipPlan(state) {
     const g = state.game;
-    const seg = g && g.spin ? SEGMENTS[g.spin.segment] : null;
+    const seg = segmentOf(state);
     const players = state.players;
     const n = players.length;
     const t = g ? g.turn : 0;
     if (!seg || !n) return [];
+    if (seg.who) {
+      const sips = seg.sips | 0;
+      const idOf = (id) => players.findIndex((p) => p.id === id);
+      if (!sips) return [];
+      if (n < 2 && (seg.who === "left" || seg.who === "right" || seg.who === "give")) return [[0, sips]];
+      if (seg.who === "all") return players.map((_, i) => [i, sips]);
+      if (seg.who === "self") return [[t, sips]];
+      if (seg.who === "left") return [[(t - 1 + n) % n, sips]];
+      if (seg.who === "right") return [[(t + 1) % n, sips]];
+      if (seg.who === "give") { const i = idOf(g.targetId); return i >= 0 ? [[i, sips]] : []; }
+      return [];
+    }
     if (n < 2 && (seg.id === "give" || seg.id === "left" || seg.id === "right")) return [[0, 2]];
     if (n < 2 && seg.id === "mate") return [[0, 1]];
     const idOf = (id) => players.findIndex((p) => p.id === id);
@@ -413,7 +478,7 @@
   function canAdvance(state) {
     const g = state.game;
     if (!g || g.id !== "rad" || g.stage !== "result" || !g.spin) return false;
-    const seg = SEGMENTS[g.spin.segment];
+    const seg = segmentOf(state);
     if (!seg) return false;
     if (seg.needs === "target" && state.players.length > 1 && !g.targetId) return false;
     if (seg.needs === "choice" && !g.choice) return false;
@@ -509,12 +574,14 @@
       case "spin": {
         const g = state.game;
         if (!g || g.id !== "rad" || g.stage !== "ready" || state.phase !== "play" || !actorOk(state, action)) return null;
-        const seg = Math.floor(Math.random() * SEGMENTS.length);
-        return { ...state, game: { ...g, rotation: spinRotation(g.rotation || 0, seg, SEGMENTS.length), stage: "result", targetId: null, choice: null, category: SEGMENTS[seg].id === "cat" ? pick(CATEGORIES) : "", spin: { id: uid(), segment: seg, at: Date.now() } } };
+        const wheel = wheelOf(g);
+        const seg = Math.floor(Math.random() * wheel.length);
+        const picked = wheel[seg];
+        return { ...state, game: { ...g, rotation: spinRotation(g.rotation || 0, seg, wheel.length), stage: "result", targetId: null, choice: null, category: picked.id === "cat" ? pick(CATEGORIES) : "", spin: { id: uid(), segment: seg, at: Date.now() } } };
       }
       case "target": {
         const g = state.game;
-        const seg = g && g.spin ? SEGMENTS[g.spin.segment] : null;
+        const seg = segmentOf(state);
         if (!g || g.stage !== "result" || !seg || seg.needs !== "target" || !actorOk(state, action)) return null;
         const p = state.players.find((x) => x.id === action.targetId);
         const current = state.players[g.turn];
@@ -523,7 +590,7 @@
       }
       case "choice": {
         const g = state.game;
-        const seg = g && g.spin ? SEGMENTS[g.spin.segment] : null;
+        const seg = segmentOf(state);
         if (!g || !seg || seg.needs !== "choice" || g.stage !== "result" || !actorOk(state, action)) return null;
         if (action.choice !== "tell" && action.choice !== "drink") return null;
         return { ...state, game: { ...g, choice: action.choice } };
@@ -533,9 +600,9 @@
         if (!g || g.id !== "rad" || g.stage !== "result" || !actorOk(state, action) || !canAdvance(state)) return null;
         const players = applyPlan(state);
         const n = players.length || 1;
-        const seg = SEGMENTS[g.spin.segment];
+        const seg = segmentOf(state);
         const turn = seg && seg.id === "again" ? g.turn % n : (g.turn + 1) % n;
-        return { ...state, players, game: { ...g, stage: "ready", turn, targetId: null, choice: null } };
+        return remember(state, { ...state, players, game: { ...g, stage: "ready", turn, targetId: null, choice: null } });
       }
       case "answer": {
         const g = state.game;
@@ -553,7 +620,7 @@
         let cursor = g.cursor + 1;
         let round = g.round || 1;
         if (cursor >= order.length) { order = shuffle(order); cursor = 0; round += 1; }
-        return { ...state, game: { ...g, order, cursor, round, stage: "ask", note: null, turn: (g.turn + 1) % n } };
+        return remember(state, { ...state, game: { ...g, order, cursor, round, stage: "ask", note: null, turn: (g.turn + 1) % n } });
       }
       case "guess": {
         const g = state.game;
@@ -577,7 +644,18 @@
         let index = g.index + 1;
         let banner = "";
         if (index >= deck.length - 1) { deck = makeDeck(); index = 0; banner = "Nieuwe stapel"; }
-        return { ...state, players, game: { ...g, deck, index, stage: "guess", guess: null, outcome: null, banner, turn: (g.turn + 1) % (players.length || 1) } };
+        return remember(state, { ...state, players, game: { ...g, deck, index, stage: "guess", guess: null, outcome: null, banner, turn: (g.turn + 1) % (players.length || 1) } });
+      }
+      case "undo": {
+        if (action.by !== state.hostId) return null;
+        const history = state.history || [];
+        if (!history.length) return null;
+        const snap = history[history.length - 1];
+        const players = state.players.map((p) => {
+          const old = snap.players.find((x) => x.id === p.id);
+          return old ? { ...p, sips: old.sips } : p;
+        });
+        return { ...state, players, phase: snap.game ? "play" : state.phase, game: snap.game, history: history.slice(0, -1) };
       }
       case "skip":
         if (action.by !== state.hostId) return null;
@@ -913,7 +991,33 @@
     if (app.state.phase !== "closed") startJoinLoop();
     render();
   }
+  function noteEveningQuestions() {
+    const g = app.state && app.state.game;
+    if (!g || g.id !== "vragen") return;
+    const shown = (g.order || []).slice(0, (g.cursor | 0) + 1);
+    const texts = shown.map((id) => (g.custom || []).find((q) => q.id === id)).filter(Boolean).map((q) => q.text);
+    const have = new Set(app.eveningQuestions || []);
+    texts.forEach((t) => have.add(t));
+    app.eveningQuestions = [...have];
+  }
+  function saveEvening() {
+    if (!app.account || !app.groupId || !app.state || !(app.state.players || []).length) return;
+    const players = app.state.players.map((p) => ({ name: p.name, sips: p.sips | 0 }));
+    const games = app.eveningGames || [];
+    if (!players.some((p) => p.sips > 0) && !games.length) return;
+    const groupId = app.groupId;
+    api("/api/groups/" + encodeURIComponent(groupId) + "/evenings", {
+      method: "POST",
+      body: { players, games, questions: app.eveningQuestions || [] },
+    }).then((data) => {
+      app.groups = (app.groups || []).map((g) => g.id === data.group.id ? data.group : g);
+    }).catch(() => {});
+  }
   function finishLeave() {
+    noteEveningQuestions();
+    saveEvening();
+    app.eveningGames = [];
+    app.eveningQuestions = [];
     app.op++;
     net.attempt++;
     if (net.cancelConn) { const c = net.cancelConn; net.cancelConn = null; c(); }
@@ -1081,6 +1185,16 @@
       return ok;
     } catch (e) { return false; }
   }
+  function qrBlock() {
+    if (app.mode !== "multi" || !app.roomCode || typeof qrcode !== "function") return "";
+    try {
+      const qr = qrcode(0, "M");
+      qr.addData(shareUrl());
+      qr.make();
+      const local = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+      return `<div class="qr-box">${qr.createSvgTag(4, 1)}<p class="fine">${local ? "Scan werkt als iedereen het wifi-adres opent, niet localhost." : "Scan om mee te doen."}</p></div>`;
+    } catch (e) { return ""; }
+  }
   function shareUrl() {
     const u = new URL(location.href);
     u.searchParams.set("room", app.roomCode);
@@ -1101,6 +1215,7 @@
   function api(path, opts) {
     const headers = { "Content-Type": "application/json" };
     if (app.token) headers.Authorization = "Bearer " + app.token;
+    if (opts && opts.admin && app.adminToken) headers["X-Admin-Token"] = app.adminToken;
     return fetch(path, { method: (opts && opts.method) || "GET", headers, body: opts && opts.body ? JSON.stringify(opts.body) : undefined })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
@@ -1121,8 +1236,43 @@
     if (data.groups) app.groups = data.groups;
     app.overlay = null;
   }
+  function applyQuestions(list) {
+    if (!Array.isArray(list) || !list.length) return;
+    const clean = list.filter((q) => q && q.id && q.text).map((q) => ({
+      id: String(q.id),
+      cat: ["licht", "groep", "pittig"].includes(q.cat) ? q.cat : "licht",
+      kind: q.kind === "point" ? "point" : "say",
+      text: String(q.text).slice(0, 180),
+      ages: Array.isArray(q.ages) && q.ages.length ? q.ages.slice() : ["16-18", "18-20", "20-25", "25-35", "35+"],
+    }));
+    if (!clean.length) return;
+    QUESTIONS = clean;
+    app.questionsRev += 1;
+  }
+  function removeQuestion(id) {
+    if (!id || !confirm("Deze vraag weghalen?")) return;
+    api("/api/admin/questions/" + encodeURIComponent(id), { method: "DELETE", admin: true })
+      .then((data) => {
+        applyQuestions(data.questions);
+        if (app.ui.editId === id) app.ui.editId = "";
+        render();
+      })
+      .catch((err) => {
+        if (/beheerder/.test(err.message)) { dropAdmin(); render(); }
+        toast(err.message);
+      });
+  }
+  function dropAdmin() {
+    app.admin = false;
+    app.adminToken = "";
+    try { sessionStorage.removeItem("maatje.admin"); } catch (e) {}
+  }
   function loadAccount() {
     if (location.protocol === "file:") return Promise.resolve();
+    try {
+      const savedAdmin = sessionStorage.getItem("maatje.admin") || "";
+      if (savedAdmin) { app.adminToken = savedAdmin; app.admin = true; }
+    } catch (e) {}
     return api("/api/config").then((cfg) => {
       app.config = cfg || { googleClientId: "" };
       if (app.config.googleClientId) loadGoogle();
@@ -1130,7 +1280,8 @@
       return api("/api/me").then((data) => setSession({ token: app.token, user: data.user, groups: data.groups }));
     }).catch(() => {
       if (app.token) { app.token = ""; localStorage.removeItem("maatje.token"); }
-    }).then(() => render());
+    }).then(() => api("/api/questions").then((data) => applyQuestions(data && data.questions)).catch(() => {}))
+      .then(() => render());
   }
   function loadGoogle() {
     if (window.google || document.getElementById("googleSdk")) return;
@@ -1211,10 +1362,8 @@
     if (!app.account) {
       return `<section class="section-head"><p class="kicker">Groepen</p><h2>Speel vaker met dezelfde mensen.</h2><p class="lede">Maak een account, start een groep en bewaar jullie eigen vragen.</p><div class="stack" style="max-width:280px;margin-top:12px"><button type="button" class="btn btn-primary" data-act="login">Account maken</button></div></section>`;
     }
-    const live = (app.groups || []).filter((g) => g.activeRoom && Date.now() - g.activeRoomAt < 1000 * 60 * 60 * 8);
-    const liveHtml = live.map((g) => `<button type="button" class="banner" data-act="join-live" data-code="${esc(g.activeRoom)}"><span class="live">Live</span> ${esc(g.name)} speelt nu. Code ${esc(g.activeRoom)}</button>`).join("");
     const cards = (app.groups || []).map((g) => `<button type="button" class="group-card gcard" data-act="open-group" data-id="${esc(g.id)}"><span class="kicker">${esc(g.code)}</span><h3>${esc(g.name)}</h3><div class="faces">${(g.members || []).slice(0, 8).map((m) => `<span class="ava" style="--c:${colorHex(m.color)}">${iconSvg(m.icon)}</span>`).join("")}</div><span class="fine">${(g.members || []).length} ${g.members.length === 1 ? "persoon" : "mensen"} · vragen ${esc((AGES.find((a) => a.id === g.age) || {}).label || "")}</span></button>`).join("");
-    return `<section>${liveHtml}<div class="section-head"><p class="kicker">Jouw groepen</p><h2>${app.groups.length ? "Waar je vaker mee speelt." : "Nog geen groep."}</h2></div><div class="group-grid">${cards}<button type="button" class="group-card gcard" data-act="groups"><h3>Nieuwe groep</h3><p>Of doe mee met een groepscode.</p></button></div></section>`;
+    return `<section><div class="section-head"><p class="kicker">Jouw groepen</p><h2>${app.groups.length ? "Waar je vaker mee speelt." : "Nog geen groep."}</h2></div><div class="group-grid">${cards}<button type="button" class="group-card gcard" data-act="groups"><h3>Nieuwe groep</h3><p>Of doe mee met een groepscode.</p></button></div></section>`;
   }
   function loginHtml() {
     if (app.overlay !== "login") return "";
@@ -1223,16 +1372,82 @@
       : `<p class="note">Google zet je aan door een client-id in config.json te zetten. Met een naam en wachtwoord kun je nu al een account maken.</p>`;
     return `<div class="modal" data-act="close-login"><div class="panel auth" data-act="stop" role="dialog" aria-modal="true"><h3>${app.ui.authMode === "register" ? "Account maken" : "Inloggen"}</h3><p class="fine">Je naam, pictogram en groepen blijven op deze computer staan.</p><form data-act="${app.ui.authMode === "register" ? "register" : "login-form"}" class="auth-grid"><label class="field">Naam<input id="authName" maxlength="16" autocomplete="username" value="${esc(app.ui.authName || "")}"></label><label class="field">Wachtwoord<input id="authPass" type="password" maxlength="64" autocomplete="${app.ui.authMode === "register" ? "new-password" : "current-password"}" value="${esc(app.ui.authPass || "")}"></label><button class="btn btn-primary" type="submit">${app.ui.authMode === "register" ? "Account maken" : "Inloggen"}</button></form>${google}<button type="button" class="btn btn-text" data-act="auth-toggle">${app.ui.authMode === "register" ? "Ik heb al een account" : "Nog geen account"}</button><button type="button" class="btn btn-ghost" data-act="close-login">Sluiten</button></div></div>`;
   }
+  function groupTile(g) {
+    const members = g.members || [];
+    const people = members.length === 1 ? "1 persoon" : members.length + " mensen";
+    const age = (AGES.find((a) => a.id === g.age) || {}).label || "20–25";
+    const faces = members.slice(0, 8).map((m) => `<li><span class="ava" style="--c:${colorHex(m.color)}">${iconSvg(m.icon)}</span><b>${esc(m.name)}</b></li>`).join("");
+    const questions = (g.questions || []).length;
+    const evenings = (g.evenings || []).length;
+    const segments = (g.segments || []).length;
+    const bits = [people, "Vragen " + age];
+    if (questions) bits.push(questions === 1 ? "1 eigen vraag" : questions + " eigen vragen");
+    if (evenings) bits.push(evenings === 1 ? "1 avond" : evenings + " avonden");
+    if (segments) bits.push(segments === 1 ? "1 vakje" : segments + " vakjes");
+    return `<button type="button" class="group-card gcard group-tile" data-act="open-group" data-id="${esc(g.id)}"><div class="tile-top"><span class="kicker">${esc(g.code)}</span><span class="fine">Openen</span></div><h3>${esc(g.name)}</h3><ul class="member-row">${faces}</ul><div class="tile-meta">${bits.map((bit) => `<span>${esc(bit)}</span>`).join("")}</div></button>`;
+  }
   function drawGroups() {
-    return `<div class="wrap">${topbar()}<p class="kicker">Groepen</p><h2>Jullie vaste tafel.</h2><div class="lobby-layout"><section class="lobby-card"><h3>Nieuwe groep</h3><form data-act="create-group" class="auth-grid"><label class="field">Naam<input id="groupName" maxlength="16" placeholder="Vrijdag" value="${esc(app.ui.groupName || "")}"></label><button class="btn btn-primary" type="submit">Maak groep</button></form></section><section class="lobby-card"><h3>Meedoen</h3><form data-act="join-group" class="auth-grid"><label class="field">Groepscode<input id="groupCode" maxlength="4" autocapitalize="characters" placeholder="K7MP" value="${esc(app.ui.groupCode || "")}"></label><button class="btn btn-primary" type="submit">Doe mee</button></form></section></div><div class="group-grid" style="margin-top:16px">${(app.groups || []).map((g) => `<button type="button" class="group-card gcard" data-act="open-group" data-id="${esc(g.id)}"><span class="kicker">${esc(g.code)}</span><h3>${esc(g.name)}</h3><span class="fine">${(g.members || []).length} mensen</span></button>`).join("") || `<p class="fine">Nog niks. Maak er een, of vraag de code.</p>`}</div><button type="button" class="btn btn-text" data-act="logout">Uitloggen</button></div>`;
+    const groups = app.groups || [];
+    const tiles = groups.map(groupTile).join("");
+    const list = tiles
+      ? `<div class="section-head"><p class="kicker">Jullie groepen</p></div><div class="group-grid${groups.length === 1 ? " one" : ""}">${tiles}</div>`
+      : `<p class="fine">Nog niks. Maak er een, of vraag de code.</p>`;
+    return `<div class="wrap groups-page">${topbar()}<div class="groups-head"><div><p class="kicker">Groepen</p><h2>Jullie vaste tafel.</h2><p class="lede">Eigen vragen, vakjes op het rad, en de stand van de vorige avond.</p></div><button type="button" class="btn btn-text" data-act="logout">Uitloggen</button></div><div class="lobby-layout"><section class="lobby-card"><h3>Nieuwe groep</h3><p class="fine">Een code voor dezelfde mensen, telkens weer.</p><form data-act="create-group" class="auth-grid"><label class="field">Naam<input id="groupName" maxlength="16" placeholder="Vrijdag" value="${esc(app.ui.groupName || "")}"></label><button class="btn btn-primary" type="submit">Maak groep</button></form></section><section class="lobby-card"><h3>Meedoen</h3><p class="fine">Vraag de code aan wie de groep heeft gemaakt.</p><form data-act="join-group" class="auth-grid"><label class="field">Groepscode<input id="groupCode" maxlength="4" autocapitalize="characters" placeholder="K7MP" value="${esc(app.ui.groupCode || "")}"></label><button class="btn btn-primary" type="submit">Doe mee</button></form></section></div>${list}</div>`;
+  }
+  function groupExtras(g) {
+    const months = ["jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "okt", "nov", "dec"];
+    const names = { rad: "Het Rad", vragen: "Vragenvuur", kaarten: "Kaarten" };
+    const whoLabel = { self: "jij", all: "iedereen", left: "links", right: "rechts", give: "iemand kiezen", none: "niemand" };
+    const evenings = (g.evenings || []).slice().reverse().map((e) => {
+      const d = new Date(e.at || 0);
+      const when = d.getDate() + " " + months[d.getMonth()];
+      const top = (e.players || []).slice().sort((a, b) => b.sips - a.sips)[0];
+      const played = (e.games || []).map((id) => names[id] || id).filter(Boolean).join(", ");
+      const qs = (e.questions || []).length ? `<span class="fine">Eigen vragen: ${(e.questions || []).map(esc).join(" · ")}</span>` : "";
+      return `<li class="prow"><span class="who"><b>${esc(when)}${played ? " · " + esc(played) : ""}</b><small>${top ? esc(top.name) + " · " + sipWord(top.sips) : "geen slokken"}</small>${qs}</span></li>`;
+    }).join("");
+    const segs = (g.segments || []).map((s) => `<li class="prow"><span class="who"><b>${esc(s.label)}</b><small>${esc(whoLabel[s.who] || s.who)}${s.sips ? " · " + s.sips : ""}${s.text ? " · " + esc(s.text) : ""}</small></span><button type="button" data-act="remove-segment" data-id="${esc(s.id)}" aria-label="Vakje weghalen">×</button></li>`).join("");
+    return `<section class="lobby-card" style="margin-top:16px"><p class="kicker">Avonden</p>${evenings ? `<ul class="plist">${evenings}</ul>` : `<p class="fine">Speel een spel vanuit deze groep en stop daarna. De stand komt hier.</p>`}</section><section class="lobby-card" style="margin-top:16px"><p class="kicker">Eigen vakjes</p><p class="fine">Die komen bij Het Rad, naast de vaste vakjes.</p><ul class="plist">${segs}</ul><form data-act="add-segment" class="auth-grid"><label class="field">Korte naam<input id="segLabel" maxlength="10" placeholder="Jarige"></label><label class="field">Wat er gebeurt<input id="segText" maxlength="80" placeholder="De jarige drinkt niet"></label><label class="field">Slokken<input id="segSips" type="number" min="0" max="4" value="0"></label><label class="field">Wie<select id="segWho"><option value="none">Niemand</option><option value="self">Jij</option><option value="all">Iedereen</option><option value="left">Links</option><option value="right">Rechts</option><option value="give">Iemand kiezen</option></select></label><button class="btn btn-primary" type="submit">Op het rad</button></form></section>`;
   }
   function drawGroup() {
     const g = (app.groups || []).find((x) => x.id === app.groupId);
     if (!g) return `<div class="narrow">${topbar()}<p>Die groep is er niet.</p><button type="button" class="btn btn-primary" data-act="groups">Terug</button></div>`;
     const mine = app.account && g.ownerId === app.account.id;
-    return `<div class="wrap">${topbar()}<p class="kicker">Groep ${esc(g.code)}</p><h2>${esc(g.name)}</h2><p class="fine">${mine ? "Jij hebt deze groep gemaakt." : "Je zit in deze groep."} Deel de code ${esc(g.code)}.</p><div class="lobby-layout"><section class="lobby-card"><p class="kicker">Mensen</p><ul class="plist">${(g.members || []).map((m, i) => `<li class="prow"><span class="ord">${i + 1}</span><span class="ava" style="--c:${colorHex(m.color)}">${iconSvg(m.icon)}</span><span class="who"><b>${esc(m.name)}</b><small>${app.account && m.userId === app.account.id ? "jij" : ""}</small></span></li>`).join("")}</ul><div class="stack" style="margin-top:12px"><button type="button" class="btn btn-primary" data-act="group-local">Speel op één telefoon</button><button type="button" class="btn btn-ghost" data-act="group-room">Start een kamer</button></div></section><section class="lobby-card"><p class="kicker">Leeftijd voor vragen</p>${AGES.map((a) => `<button type="button" class="chip ${g.age === a.id ? "is-on" : ""}" data-act="group-age" data-age="${a.id}">${a.label}</button>`).join(" ")}<p class="fine">${esc((AGES.find((a) => a.id === g.age) || AGES[2]).hint)}</p><p class="kicker" style="margin-top:16px">Eigen vragen</p><ul class="plist">${(g.questions || []).map((q) => `<li class="prow"><span class="who"><b>${esc(q.text)}</b><small>${esc(q.by || "")}</small></span></li>`).join("") || `<li class="fine">Nog geen eigen vragen.</li>`}</ul><form data-act="add-question" class="auth-grid" style="margin-top:10px"><label class="field">Nieuwe vraag<input id="customQ" maxlength="180" placeholder="Wijs aan: wie regelt de bitterballen?" value="${esc(app.ui.customQ || "")}"></label><button class="btn btn-primary" type="submit">Bewaar vraag</button></form></section></div><button type="button" class="btn btn-text" data-act="leave-group">Groep verlaten</button></div>`;
+    return `<div class="wrap">${topbar()}<p class="kicker">Groep ${esc(g.code)}</p><h2>${esc(g.name)}</h2><p class="fine">${mine ? "Jij hebt deze groep gemaakt." : "Je zit in deze groep."} Deel de code ${esc(g.code)}.</p><div class="lobby-layout"><section class="lobby-card"><p class="kicker">Mensen</p><ul class="plist">${(g.members || []).map((m, i) => `<li class="prow"><span class="ord">${i + 1}</span><span class="ava" style="--c:${colorHex(m.color)}">${iconSvg(m.icon)}</span><span class="who"><b>${esc(m.name)}</b><small>${app.account && m.userId === app.account.id ? "jij" : ""}</small></span></li>`).join("")}</ul><div class="stack" style="margin-top:12px"><button type="button" class="btn btn-primary" data-act="group-local">Speel op één telefoon</button><button type="button" class="btn btn-ghost" data-act="group-room">Start een kamer</button></div></section><section class="lobby-card"><p class="kicker">Leeftijd voor vragen</p>${AGES.map((a) => `<button type="button" class="chip ${g.age === a.id ? "is-on" : ""}" data-act="group-age" data-age="${a.id}">${a.label}</button>`).join(" ")}<p class="fine">${esc((AGES.find((a) => a.id === g.age) || AGES[2]).hint)}</p><p class="kicker" style="margin-top:16px">Eigen vragen</p><ul class="plist">${(g.questions || []).map((q) => `<li class="prow"><span class="who"><b>${esc(q.text)}</b><small>${esc(q.by || "")}</small></span></li>`).join("") || `<li class="fine">Nog geen eigen vragen.</li>`}</ul><form data-act="add-question" class="auth-grid" style="margin-top:10px"><label class="field">Nieuwe vraag<input id="customQ" maxlength="180" placeholder="Wijs aan: wie regelt de bitterballen?" value="${esc(app.ui.customQ || "")}"></label><button class="btn btn-primary" type="submit">Bewaar vraag</button></form></section></div>${groupExtras(g)}<button type="button" class="btn btn-text" data-act="leave-group">Groep verlaten</button></div>`;
+  }
+  function applyTheme(theme) {
+    const choice = ["system", "dark", "light"].includes(theme) ? theme : "dark";
+    app.theme = choice;
+    try { localStorage.setItem("maatje.theme", choice); } catch (e) {}
+    const systemDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.dataset.theme = choice === "system" ? (systemDark ? "dark" : "light") : choice;
+  }
+  function drawSettings() {
+    const d = app.draft || app.profile || { name: "", icon: "glass", color: "blue" };
+    const theme = app.theme || "dark";
+    return `<div class="wrap">${topbar()}<div class="set-head"><button type="button" class="btn btn-text" data-act="settings-back">‹ Terug</button><div><p class="kicker">Instellingen</p><h2>Jouw voorkeuren</h2></div></div><div class="set-grid"><section class="set-card"><p class="label">Avatar</p><div class="you-pill" style="--c:${colorHex(d.color)}"><span class="mini-ico">${iconSvg(d.icon)}</span><strong id="settingsPreview">${esc(cleanName(d.name, "") || "Jouw naam")}</strong></div><p class="fine">Kies een pictogram en een kleur.</p><label class="field">Naam<input id="settingsName" maxlength="16" value="${esc(d.name || "")}" autocomplete="off" spellcheck="false"></label><p class="label">Pictogram</p><div class="icons">${ICONS.map((ic) => `<button type="button" class="ico ${d.icon === ic.id ? "is-on" : ""}" data-act="pick-icon" data-id="${ic.id}" aria-label="${ic.label}" aria-pressed="${d.icon === ic.id}">${ic.svg}</button>`).join("")}</div><p class="label">Kleur</p><div class="swatches">${COLORS.map((c) => `<button type="button" class="swatch ${d.color === c.id ? "is-on" : ""}" style="--c:${c.hex}" data-act="pick-color" data-id="${c.id}" aria-label="${c.label}" aria-pressed="${d.color === c.id}"></button>`).join("")}</div></section><section class="set-card"><p class="label">Thema</p><div class="seg">${[["system", "Systeem"], ["dark", "Donker"], ["light", "Licht"]].map(([id, label]) => `<button type="button" class="${theme === id ? "is-on" : ""}" data-act="theme" data-theme="${id}">${label}</button>`).join("")}</div><button type="button" class="set-row" data-act="sound"><span>Geluid</span><strong>${app.sound ? "Aan" : "Uit"}</strong></button><p class="label">Leeftijd voor vragen</p>${ageChips()}<p class="fine">${esc((AGES.find((a) => a.id === app.ui.age) || AGES[2]).hint)}</p><button type="button" class="set-row" data-act="admin"><span>Vragen</span><strong>Beheren</strong></button><button type="button" class="set-row" data-act="${app.account ? "groups" : "login"}"><span>${app.account ? "Groepen" : "Account"}</span><strong>${app.account ? esc(app.account.name) : "Inloggen"}</strong></button>${app.account ? `<button type="button" class="set-row" data-act="logout"><span>Uitloggen</span><strong></strong></button>` : ""}</section></div></div>`;
+  }
+  function ageChecks(selected) {
+    const set = new Set(selected && selected.length ? selected : AGES.map((a) => a.id));
+    return `<div class="age-checks">${AGES.map((a) => `<label><input type="checkbox" data-age="${a.id}" ${set.has(a.id) ? "checked" : ""}> ${a.label}</label>`).join("")}</div>`;
+  }
+  function questionEditor(q) {
+    const cat = q ? q.cat : "licht";
+    const kind = q ? q.kind : "say";
+    return `<form data-act="save-question" class="set-card"><input type="hidden" id="qId" value="${q ? esc(q.id) : ""}"><label class="field">Vraag<textarea id="qText" maxlength="180" rows="3" required>${q ? esc(q.text) : ""}</textarea></label><label class="field">Soort<select id="qCat"><option value="licht" ${cat === "licht" ? "selected" : ""}>Licht</option><option value="groep" ${cat === "groep" ? "selected" : ""}>Groep</option><option value="pittig" ${cat === "pittig" ? "selected" : ""}>Pittig</option></select></label><label class="field">Wat je doet<select id="qKind"><option value="say" ${kind !== "point" ? "selected" : ""}>Vertellen</option><option value="point" ${kind === "point" ? "selected" : ""}>Wijs aan</option></select></label><p class="label">Leeftijden</p>${ageChecks(q ? q.ages : null)}<p class="fine">Pittig komt nooit bij 16–18.</p><div class="stack"><button class="btn btn-primary" type="submit">${q ? "Opslaan" : "Toevoegen"}</button><button type="button" class="btn btn-text" data-act="cancel-edit">Annuleren</button></div></form>`;
+  }
+  function drawAdmin() {
+    if (!app.admin) {
+      return `<div class="wrap">${topbar()}<div class="set-head"><button type="button" class="btn btn-text" data-act="admin-back">‹ Terug</button><div><p class="kicker">Beheer</p><h2>Vragen</h2></div></div><section class="set-card"><p class="fine">Het wachtwoord staat in config.json bij adminPassword.</p><form data-act="admin-login" class="auth-grid"><label class="field">Wachtwoord<input id="adminPass" type="password" maxlength="64" autocomplete="current-password" required></label><button class="btn btn-primary" type="submit">Openen</button></form>${app.error ? `<p class="fine">${esc(app.error)}</p>` : ""}</section></div>`;
+    }
+    const editing = app.ui.editId && app.ui.editId !== "new" ? QUESTIONS.find((q) => q.id === app.ui.editId) : null;
+    const form = app.ui.editId ? questionEditor(editing || null) : `<button type="button" class="btn btn-primary" data-act="new-question">Nieuwe vraag</button>`;
+    const rows = QUESTIONS.map((q) => `<article class="q-row"><div><strong>${esc(q.text)}</strong><small>${esc({ licht: "Licht", groep: "Groep", pittig: "Pittig" }[q.cat] || q.cat)} · ${q.kind === "point" ? "wijs aan" : "vertel"} · ${esc((q.ages || []).join(", "))}</small></div><div class="q-actions"><button type="button" class="btn btn-ghost" data-act="edit-question" data-id="${esc(q.id)}">Aanpassen</button><button type="button" class="btn btn-ghost" data-act="delete-question" data-id="${esc(q.id)}">Weg</button></div></article>`).join("");
+    return `<div class="wrap">${topbar()}<div class="set-head"><button type="button" class="btn btn-text" data-act="admin-back">‹ Terug</button><div><p class="kicker">Beheer</p><h2>${QUESTIONS.length} vragen</h2></div></div>${form}<div class="q-admin">${rows}</div><button type="button" class="btn btn-text" data-act="admin-logout">Beheer sluiten</button></div>`;
   }
   function view() {
+    if (app.screen === "settings") return "settings";
+    if (app.screen === "admin") return "admin";
     if (app.overlay === "style") return "style";
     if (app.screen === "groups" && !app.mode) return "groups";
     if (app.screen === "group" && !app.mode) return "group";
@@ -1268,20 +1483,29 @@
   function logoSvg() {
     return '<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 6h6l-.7 6.2a2.8 2.8 0 0 1-4.6 0L7 6z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M19 6h6l-.7 6.2a2.8 2.8 0 0 1-4.6 0L19 6z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M10 22c1.2 2 2.4 3 4 3s2.6-.8 4-3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
   }
+  function gearSvg() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9c.3.6.9 1 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>';
+  }
   function soundSvg(on) {
     return on
       ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 10v4h3l4 3V7L7 10H4z"/><path d="M16 9a4 4 0 0 1 0 6"/><path d="M18.5 7a7 7 0 0 1 0 10"/></svg>'
       : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 10v4h3l4 3V7L7 10H4z"/><path d="m16 10 5 5M21 10l-5 5"/></svg>';
+  }
+  function topNav() {
+    const v = view();
+    const tabs = [
+      { act: "brand", label: "Home", on: v === "home" },
+      { act: app.account ? "groups" : "login", label: "Groepen", on: v === "groups" || v === "group" },
+    ];
+    if (app.mode) tabs.push({ act: "nav-play", label: "Spel", on: v === "lobby" || v === "play" || v === "connecting" || v === "local-players" || v === "closed" });
+    return `<nav class="nav" aria-label="Pagina's">${tabs.map((tab) => `<button type="button" class="${tab.on ? "is-on" : ""}" data-act="${tab.act}"${tab.on ? ' aria-current="page"' : ""}>${tab.label}</button>`).join("")}</nav>`;
   }
   function topbar() {
     const me = app.profile || { name: "Jij", icon: "glass", color: "blue" };
     const code = app.mode === "multi" && app.roomCode
       ? `<button type="button" class="chip-code ${connClass()}" data-act="copy-code"><i></i>${esc(app.roomCode)}</button>`
       : "";
-    const account = app.account
-      ? `<button type="button" class="btn btn-text" data-act="groups">Groepen</button>`
-      : `<button type="button" class="btn btn-text" data-act="login">Inloggen</button>`;
-    return `<header class="top"><button type="button" class="brand" data-act="brand">${logoSvg()}<b>Maatje</b></button><div class="top-actions">${code}${account}<button type="button" class="iconbtn" data-act="sound" aria-label="${app.sound ? "Geluid uit" : "Geluid aan"}">${soundSvg(app.sound)}</button><button type="button" class="you-mini" data-act="style" aria-label="Jouw stijl"><span class="mini-ico" style="color:${colorHex(me.color)}">${iconSvg(me.icon)}</span><strong>${esc(me.name)}</strong></button></div></header>`;
+    return `<header class="bar"><div class="top"><div class="top-left"><button type="button" class="brand" data-act="brand">${logoSvg()}<b>Maatje</b></button></div>${topNav()}<div class="top-actions">${code}<button type="button" class="iconbtn" data-act="sound" aria-label="${app.sound ? "Geluid uit" : "Geluid aan"}">${soundSvg(app.sound)}</button><button type="button" class="iconbtn" data-act="settings" aria-label="Instellingen">${gearSvg()}</button><button type="button" class="you-mini" data-act="style" aria-label="Jouw stijl"><span class="mini-ico" style="color:${colorHex(me.color)}">${iconSvg(me.icon)}</span><strong>${esc(me.name)}</strong></button></div></div></header>`;
   }
   function codeTiles(code) {
     const chars = String(code || "").slice(0, 4).split("");
@@ -1301,13 +1525,27 @@
     return GAMES.map((g) => {
       const cats = [["mix", "Mix"], ["licht", "Licht"], ["groep", "Groep"]].concat(app.ui.age === "16-18" ? [] : [["pittig", "Pittig"]]);
       const filters = g.id === "vragen" && canStart ? `${ageChips()}<p class="fine">${esc((AGES.find((a) => a.id === app.ui.age) || AGES[2]).hint)}</p><div class="chips">${cats.map(([id, label]) => `<button type="button" class="chip ${app.ui.filter === id ? "is-on" : ""}" data-act="filter" data-filter="${id}">${label}</button>`).join("")}</div>` : "";
-      const actions = `<div class="card-actions">${canStart ? `<button type="button" class="btn btn-primary" data-act="start-game" data-game="${g.id}">Start</button>` : ""}<button type="button" class="btn btn-text" data-act="rules" data-game="${g.id}">Spelregels</button></div>`;
-      return `<article class="gcard g-${g.id}"><span class="tag">${g.tag}</span><h3>${g.name}</h3><p>${g.blurb}</p><span class="meta">${g.time}</span>${filters}${actions}</article>`;
+      const start = canStart ? `<button type="button" class="btn btn-primary" data-act="start-game" data-game="${g.id}">Start</button>` : "";
+      const rules = view() === "home" ? "" : `<button type="button" class="btn btn-text" data-act="rules" data-game="${g.id}">Spelregels</button>`;
+      const actions = start || rules ? `<div class="card-actions">${start}${rules}</div>` : "";
+      const marks = {
+        rad: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><path d="M12 4v8l5 3"/><path d="M12 2.5V4M12 20v1.5M2.5 12H4M20 12h1.5"/></svg>',
+        vragen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 9a4 4 0 1 1 6.3 3.2c-.8.6-1.3 1.1-1.3 2.1"/><path d="M12 18h.01"/></svg>',
+        kaarten: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="7" y="3" width="12" height="16" rx="2"/><rect x="4" y="6" width="12" height="16" rx="2"/><path d="M10 14.2c.6-1.3 1.2-1.3 1.8 0 .5 1.1-.9 2-1.8 2.6-.9-.6-2.3-1.5-1.8-2.6.6-1.3 1.2-1.3 1.8 0z"/></svg>',
+      };
+      return `<article class="gcard g-${g.id}"><span class="mark" aria-hidden="true">${marks[g.id] || ""}</span><span class="tag">${g.tag}</span><h3>${g.name}</h3><p>${g.blurb}</p><span class="meta">${g.time}</span>${filters}${actions}</article>`;
     }).join("");
+  }
+  function homeRules() {
+    const cols = ["rad", "vragen", "kaarten"].map((id) => {
+      const data = RULES[id];
+      return `<div class="rule-col"><h3>${esc(data.title)}</h3><ul>${data.lines.map((line) => `<li>${esc(line)}</li>`).join("")}</ul></div>`;
+    }).join("");
+    return `<section class="home-rules"><p class="kicker">Spelregels</p><h2>Kort en duidelijk.</h2><div class="rule-grid">${cols}</div></section>`;
   }
   function drawHome() {
     const p = app.profile || { name: "Jij", icon: "glass", color: "blue" };
-    return `<div class="wrap">${topbar()}<section class="hero"><div class="hero-copy"><p class="kicker">Drankspelletjes</p><h1>Zet ’m op tafel.</h1><p class="lede">Drie spelletjes die je in een minuut snapt. Eén telefoon doorgeven, of allemaal meedoen met een code.</p><div class="mascot" aria-hidden="true"><div class="m-wheel"></div><div class="m-card"><span>A</span><b>♥</b></div><div class="m-q">?</div></div></div><section class="join"><h2>Aan tafel</h2><p class="muted">Kies hoe jullie spelen.</p><button type="button" class="you-row" data-act="style"><span class="mini-ico" style="color:${colorHex(p.color)}">${iconSvg(p.icon)}</span><span><small>Jij speelt als</small><strong>${esc(p.name)}</strong></span><em>Wijzig</em></button><button type="button" class="btn btn-primary" data-act="local">Eén telefoon</button><p class="or">of samen</p><form data-act="join" class="join-row"><label class="code-field"><span class="sr">Spelcode</span><input id="codeInput" maxlength="8" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Spelcode" value="${esc(app.ui.codeValue || "")}"><span class="slots" id="codeSlots" aria-hidden="true"><i></i><i></i><i></i><i></i></span></label><button class="btn btn-blue" type="submit">Meedoen</button></form><div class="stack" style="margin-top:10px"><button type="button" class="btn btn-ghost" data-act="create">Nieuw spel starten</button></div><p class="fine">Meerdere telefoons hebben internet nodig. Je hoeft niks te kopen. De telefoon die het spel start, blijft aan.</p>${netNote()}</section></section><section><div class="section-head"><p class="kicker">Drie spellen</p><h2>Verder niks.</h2></div><div class="gcards">${gameCards(false)}</div></section><section class="steps"><article class="step"><b>01</b><div><h3>Je look</h3><p>Naam, pictogram en een kleur. Zo zien de anderen je.</p></div></article><article class="step"><b>02</b><div><h3>Eén scherm of een code</h3><p>Doorgeven, of iedereen op de eigen telefoon.</p></div></article><article class="step"><b>03</b><div><h3>Spelen</h3><p>Het rad, vragen, of kaarten. De teller houdt slokken bij.</p></div></article></section>${homeGroups()}<p class="foot">Alcohol is voor 18+. Drink met mate. Een account is vrijwillig en staat lokaal in een JSON-bestand. Deel een spelcode alleen met je tafel.</p></div>`;
+    return `<div class="wrap">${topbar()}<section class="hero"><div class="hero-copy"><p class="kicker">Drankspelletjes</p><h1>Zet ’m op tafel.</h1><p class="lede">Drie spelletjes die je in een minuut snapt. Eén telefoon doorgeven, of allemaal meedoen met een code.</p><div class="mascot" aria-hidden="true"><div class="m-wheel"></div><div class="m-card"><span>A</span><b>♥</b></div><div class="m-q">?</div></div></div><section class="join"><h2>Aan tafel</h2><p class="muted">Kies hoe jullie spelen.</p><button type="button" class="you-row" data-act="style"><span class="mini-ico" style="color:${colorHex(p.color)}">${iconSvg(p.icon)}</span><span><small>Jij speelt als</small><strong>${esc(p.name)}</strong></span><em>Wijzig</em></button><button type="button" class="btn btn-primary" data-act="local">Eén telefoon</button><p class="or">of samen</p><form data-act="join" class="join-row"><label class="code-field"><span class="sr">Spelcode</span><input id="codeInput" maxlength="8" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Spelcode" value="${esc(app.ui.codeValue || "")}"><span class="slots" id="codeSlots" aria-hidden="true"><i></i><i></i><i></i><i></i></span></label><button class="btn btn-blue" type="submit">Meedoen</button></form><div class="stack" style="margin-top:10px"><button type="button" class="btn btn-ghost" data-act="create">Nieuw spel starten</button></div><p class="fine">Meerdere telefoons hebben internet nodig. Je hoeft niks te kopen. De telefoon die het spel start, blijft aan.</p>${netNote()}</section></section><section class="home-games"><div class="section-head"><p class="kicker">Drie spellen</p><h2>Kies er een.</h2></div><div class="gcards">${gameCards(false)}</div></section>${homeRules()}${homeGroups()}<p class="foot">Alcohol is voor 18+. Drink met mate. Een account is vrijwillig en staat lokaal in een JSON-bestand. Deel een spelcode alleen met je tafel.</p></div>`;
   }
   function drawStyle() {
     const d = app.draft || { name: "", icon: "glass", color: "blue" };
@@ -1344,7 +1582,7 @@
   function drawLobby() {
     const host = app.mode !== "multi" || app.isHost;
     const codeBlock = app.mode === "multi"
-      ? `<p class="kicker">Kamer</p><h2>De code</h2>${codeTiles(app.roomCode)}<div class="share-row"><button type="button" class="btn btn-primary" data-act="share">Deel de code</button><button type="button" class="btn btn-ghost" data-act="copy-code">Kopieer</button></div><p class="fine">Laat dit scherm aan op de telefoon die startte. Gaat die op slot, dan kan iemand anders de leiding nemen.</p>`
+      ? `<p class="kicker">Kamer</p><h2>De code</h2>${codeTiles(app.roomCode)}${qrBlock()}<div class="share-row"><button type="button" class="btn btn-primary" data-act="share">Deel de code</button><button type="button" class="btn btn-ghost" data-act="copy-code">Kopieer</button></div><p class="fine">Laat dit scherm aan op de telefoon die startte. Gaat die op slot, dan kan iemand anders de leiding nemen.</p>`
       : `<p class="kicker">Eén telefoon</p><h2>Kies een spel</h2><p class="hint">Geef de telefoon door aan wie aan de beurt is.</p>`;
     const sips = app.state.players.some((p) => p.sips > 0) && host ? `<button type="button" class="btn btn-text" data-act="reset-sips">Teller op nul</button>` : "";
     const edit = app.mode === "local" ? `<button type="button" class="btn btn-text" data-act="edit-players">Wijzig spelers</button>` : "";
@@ -1362,13 +1600,24 @@
   }
   function resultInfo() {
     const g = app.state.game;
-    const seg = SEGMENTS[g.spin.segment];
+    const seg = segmentOf(app.state);
     const n = app.state.players.length;
     const t = g.turn % n;
     const me = app.state.players[t];
     const left = app.state.players[(t - 1 + n) % n];
     const right = app.state.players[(t + 1) % n];
     const target = app.state.players.find((p) => p.id === g.targetId);
+    if (!seg) return { title: "Vakje", text: "" };
+    if (seg.who) {
+      const amount = seg.sips === 1 ? "1 slok" : (seg.sips || 0) + " slokken";
+      if (seg.text) return { title: seg.label, text: seg.text };
+      if (seg.who === "all") return { title: seg.label, text: "Iedereen neemt " + amount + "." };
+      if (seg.who === "left") return { title: seg.label, text: left.name + " neemt " + amount + "." };
+      if (seg.who === "right") return { title: seg.label, text: right.name + " neemt " + amount + "." };
+      if (seg.who === "give") return { title: seg.label, text: target ? target.name + " neemt " + amount + "." : "Kies wie " + amount + " neemt." };
+      if (seg.who === "none" || !seg.sips) return { title: seg.label, text: "Niemand drinkt." };
+      return { title: seg.label, text: me.name + " neemt " + amount + "." };
+    }
     if (n < 2 && (seg.id === "give" || seg.id === "left" || seg.id === "right")) return { title: seg.label, text: me.name + " neemt 2 slokken." };
     if (n < 2 && seg.id === "mate") return { title: "Maatje", text: "Je bent nog alleen. Neem 1 slok." };
     switch (seg.id) {
@@ -1391,13 +1640,14 @@
     }
   }
   function wheelHtml() {
-    const a = 360 / SEGMENTS.length;
-    const bg = `conic-gradient(from 0deg, ${SEGMENTS.map((s, i) => `${s.bg} ${i * a}deg ${(i + 1) * a}deg`).join(",")})`;
-    const labels = SEGMENTS.map((s, i) => {
+    const parts = wheelOf(app.state && app.state.game);
+    const a = 360 / parts.length;
+    const bg = `conic-gradient(from 0deg, ${parts.map((s, i) => `${s.bg} ${i * a}deg ${(i + 1) * a}deg`).join(",")})`;
+    const labels = parts.map((s, i) => {
       const mid = (i + 0.5) * a;
-      return `<div class="lab" style="transform:rotate(${mid}deg)"><div class="lab-in" style="color:${s.fg}"><span class="emo">${s.emoji}</span><span class="w">${s.label}</span></div></div>`;
+      return `<div class="lab" style="transform:rotate(${mid}deg)"><div class="lab-in" style="color:${s.fg}"><span class="emo">${s.emoji}</span><span class="w">${esc(s.label)}</span></div></div>`;
     }).join("");
-    const spokes = SEGMENTS.map((_, i) => `<i class="spoke" style="transform:rotate(${i * a}deg)"></i>`).join("");
+    const spokes = parts.map((_, i) => `<i class="spoke" style="transform:rotate(${i * a}deg)"></i>`).join("");
     return `<div class="wheel-wrap"><div class="pointer"></div><div id="wheelSpin" class="wheel-spin"><div class="wheel-face" style="background:${bg}"></div>${spokes}${labels}</div><div class="hub">${iconSvg("glass")}</div></div>`;
   }
   function drawRad() {
@@ -1405,15 +1655,15 @@
     let result = "";
     if (resultVisible()) {
       const info = resultInfo();
-      const seg = SEGMENTS[g.spin.segment];
-      const picks = seg.needs === "target" && app.state.players.length > 1 && myTurn()
+      const seg = segmentOf(app.state);
+      const picks = seg && seg.needs === "target" && app.state.players.length > 1 && myTurn()
         ? `<div class="targets">${app.state.players.filter((p) => p.id !== app.state.players[g.turn].id).map((p) => `<button type="button" class="choice ${g.targetId === p.id ? "is-on" : ""}" data-act="target" data-id="${p.id}">${esc(p.name)}</button>`).join("")}</div>`
         : "";
-      const choices = seg.needs === "choice" && myTurn()
+      const choices = seg && seg.needs === "choice" && myTurn()
         ? `<div class="pair"><button type="button" class="choice ${g.choice === "tell" ? "is-on" : ""}" data-act="choice" data-choice="tell">Ik vertel het</button><button type="button" class="choice ${g.choice === "drink" ? "is-on" : ""}" data-act="choice" data-choice="drink">Liever 3 slokken</button></div>`
         : "";
-      const timer = (seg.id === "story" || seg.id === "water") ? '<button type="button" class="btn btn-ghost" data-act="timer" id="timerBtn"><span id="timerLabel">Start 20s</span></button>' : "";
-      const cat = seg.id === "cat" && g.category ? `<div class="cat-pill">${esc(g.category)}</div>` : "";
+      const timer = seg && (seg.id === "story" || seg.id === "water") ? '<button type="button" class="btn btn-ghost" data-act="timer" id="timerBtn"><span id="timerLabel">Start 20s</span></button>' : "";
+      const cat = seg && seg.id === "cat" && g.category ? `<div class="cat-pill">${esc(g.category)}</div>` : "";
       const adds = sipPlan(app.state).map(([i, n]) => app.state.players[i] ? esc(app.state.players[i].name) + " +" + n : "").filter(Boolean).join(" · ");
       result = `<section class="result" id="result"><h3>${esc(info.title)}</h3>${cat}<p>${esc(info.text)}</p>${picks}${choices}${timer}${adds ? `<p class="fine">${adds}</p>` : ""}</section>`;
     }
@@ -1422,7 +1672,7 @@
     else if (!resultVisible()) dockBtn = '<button type="button" class="btn btn-primary" disabled>Draaien…</button>';
     else if (!myTurn()) dockBtn = '<p class="wait">Kijk mee.</p>';
     else {
-      const seg = SEGMENTS[g.spin.segment];
+      const seg = segmentOf(app.state);
       dockBtn = `<button type="button" class="btn btn-primary" data-act="next" ${canAdvance(app.state) ? "" : "disabled"}>${seg && seg.id === "again" ? "Nog een keer draaien" : "Volgende"}</button>`;
     }
     const order = app.state.players.length > 1 ? `<p class="fine">Volgorde: ${app.state.players.map((p) => esc(p.name)).join(" → ")}</p>` : "";
@@ -1469,7 +1719,8 @@
   }
   function dockLinks() {
     const host = app.mode !== "multi" || app.isHost;
-    return `<div class="dock-links">${host ? '<button type="button" class="btn btn-text" data-act="to-lobby">Ander spel</button>' : ""}${host ? '<button type="button" class="btn btn-text" data-act="skip">Beurt overslaan</button>' : ""}<button type="button" class="btn btn-text" data-act="ask-leave">Stoppen</button></div>`;
+    const undo = host && app.state && app.state.history && app.state.history.length ? '<button type="button" class="btn btn-text" data-act="undo">Ongedaan</button>' : "";
+    return `<div class="dock-links">${undo}${host ? '<button type="button" class="btn btn-text" data-act="to-lobby">Ander spel</button>' : ""}${host ? '<button type="button" class="btn btn-text" data-act="skip">Beurt overslaan</button>' : ""}<button type="button" class="btn btn-text" data-act="ask-leave">Stoppen</button></div>`;
   }
   function drawPlay() {
     const g = app.state.game;
@@ -1494,6 +1745,8 @@
       case "closed": return drawClosed();
       case "groups": return drawGroups();
       case "group": return drawGroup();
+      case "settings": return drawSettings();
+      case "admin": return drawAdmin();
       default: return drawHome();
     }
   }
@@ -1508,7 +1761,7 @@
     const s = app.state;
     const g = s && s.game;
     const gameFp = g ? [g.id, g.stage, g.turn, g.spin && g.spin.id, g.targetId, g.choice, g.cursor, g.index, g.outcome, g.note, g.banner, g.category, g.round].join(".") : "";
-    return [view(), app.conn, app.error || "", app.ui.noRoom ? 1 : 0, app.ui.stale ? 1 : 0, app.ui.confirmLeave ? 1 : 0, app.ui.rules || "", app.ui.filter || "", app.ui.age || "", app.ui.joinWait || "", app.overlay || "", app.screen || "", app.groupId || "", app.account ? app.account.id : "", (app.groups || []).map((g) => g.id + g.activeRoom + (g.questions || []).length).join(","), app.roomCode || "", resultVisible() ? 1 : 0, app.profile ? app.profile.name + app.profile.icon + app.profile.color : "", app.draft ? app.draft.icon + app.draft.color : "", (app.draftPlayers || []).map((p) => p.id + p.icon + p.color).join(","), s ? s.rev + ":" + s.gen + ":" + s.phase + ":" + s.hostId + ":" + s.players.map((p) => p.id + p.name + p.sips + p.icon + p.color).join("/") + ":" + gameFp : ""].join("~");
+    return [view(), app.conn, app.error || "", app.sound ? 1 : 0, app.admin ? 1 : 0, app.questionsRev, app.ui.editId || "", app.ui.noRoom ? 1 : 0, app.ui.stale ? 1 : 0, app.ui.confirmLeave ? 1 : 0, app.ui.rules || "", app.ui.filter || "", app.ui.age || "", app.ui.joinWait || "", app.overlay || "", app.ui.authMode || "", app.screen || "", app.theme || "", app.groupId || "", app.account ? app.account.id : "", (app.groups || []).map((g) => g.id + g.activeRoom + (g.questions || []).length + ":" + (g.segments || []).length + ":" + (g.evenings || []).length).join(","), app.roomCode || "", resultVisible() ? 1 : 0, app.profile ? app.profile.name + app.profile.icon + app.profile.color : "", app.draft ? app.draft.icon + app.draft.color : "", (app.draftPlayers || []).map((p) => p.id + p.icon + p.color).join(","), s ? s.rev + ":" + s.gen + ":" + s.phase + ":" + s.hostId + ":" + s.players.map((p) => p.id + p.name + p.sips + p.icon + p.color).join("/") + ":" + gameFp : ""].join("~");
   }
   function captureForm() {
     const a = document.activeElement;
@@ -1687,7 +1940,8 @@ function addDraft(name) {
     if (!GAMES.some((g) => g.id === id)) return;
     app.screen = "play";
     const group = (app.groups || []).find((g) => g.id === app.groupId);
-    dispatch({ type: "start", game: initGame(id, { filter: app.ui.filter || "mix", age: (group && group.age) || app.ui.age, custom: group ? group.questions : [] }, app.state.players.length) });
+    app.eveningGames = (app.eveningGames || []).concat(id);
+    dispatch({ type: "start", game: initGame(id, { filter: app.ui.filter || "mix", age: (group && group.age) || app.ui.age, custom: group ? group.questions : [], segments: group ? group.segments : [] }, app.state.players.length) });
   }
   function requestHome() {
     if ((app.mode === "multi" && app.state && app.state.phase !== "closed") || (app.mode === "local" && app.state)) {
@@ -1726,15 +1980,59 @@ function addDraft(name) {
     if (act === "stop") return;
     ensureAudio();
     if (act === "brand") return requestHome();
+    if (act === "nav-play") {
+      app.overlay = null;
+      app.screen = app.state ? "" : "local-players";
+      render();
+      return;
+    }
     if (act === "style") return openStyle();
     if (act === "sound") {
       app.sound = !app.sound;
       localStorage.setItem("maatje.sound", app.sound ? "on" : "off");
+      if (app.sound) { ensureAudio(); playBlip(); }
       render();
       return;
     }
-    if (act === "pick-icon") { app.draft.icon = validIcon(t.dataset.id); render(); return; }
-    if (act === "pick-color") { app.draft.color = validColor(t.dataset.id); render(); return; }
+    if (act === "pick-icon" || act === "pick-color") {
+      if (!app.draft) app.draft = { ...(app.profile || { name: "", icon: "glass", color: "blue" }) };
+      if (act === "pick-icon") app.draft.icon = validIcon(t.dataset.id);
+      else app.draft.color = validColor(t.dataset.id);
+      if (app.screen === "settings") persistProfile(app.draft);
+      render();
+      return;
+    }
+    if (act === "settings") {
+      app.ui.beforeScreen = app.screen === "settings" ? "home" : app.screen;
+      app.draft = { ...(app.profile || { name: "", icon: "glass", color: "blue" }) };
+      app.screen = "settings";
+      render();
+      return;
+    }
+    if (act === "settings-back") {
+      app.screen = app.ui.beforeScreen && app.ui.beforeScreen !== "settings" ? app.ui.beforeScreen : "home";
+      render();
+      return;
+    }
+    if (act === "admin") {
+      app.screen = "admin";
+      app.error = "";
+      render();
+      return;
+    }
+    if (act === "admin-back") {
+      app.screen = "settings";
+      app.ui.editId = "";
+      app.error = "";
+      render();
+      return;
+    }
+    if (act === "admin-logout") { dropAdmin(); app.ui.editId = ""; render(); return; }
+    if (act === "new-question") { app.ui.editId = "new"; app.error = ""; render(); return; }
+    if (act === "cancel-edit") { app.ui.editId = ""; app.error = ""; render(); return; }
+    if (act === "edit-question") { app.ui.editId = t.dataset.id || ""; app.error = ""; render(); return; }
+    if (act === "delete-question") { removeQuestion(t.dataset.id); return; }
+    if (act === "theme") { applyTheme(t.dataset.theme); render(); return; }
     if (act === "back-style") return backFromStyle();
     if (act === "skip-style") return saveStyleFromDraft(true);
     if (act === "local") return openLocal();
@@ -1811,6 +2109,12 @@ function addDraft(name) {
         .catch((err) => toast(err.message));
       return;
     }
+    if (act === "remove-segment") {
+      api("/api/groups/" + encodeURIComponent(app.groupId) + "/segments", { method: "POST", body: { remove: t.dataset.id } })
+        .then((data) => { app.groups = app.groups.map((g) => g.id === data.group.id ? data.group : g); render(); })
+        .catch((err) => toast(err.message));
+      return;
+    }
     if (act === "leave-group") {
       api("/api/groups/" + encodeURIComponent(app.groupId), { method: "POST", body: {} })
         .then(() => api("/api/me"))
@@ -1818,7 +2122,6 @@ function addDraft(name) {
         .catch((err) => toast(err.message));
       return;
     }
-    if (act === "join-live") { joinRoom(t.dataset.code || ""); return; }
     if (act === "rules") { app.ui.rules = t.dataset.game || (app.state && app.state.game && app.state.game.id) || "rad"; render(); return; }
     if (act === "close-rules") { app.ui.rules = ""; render(); return; }
     if (act === "start-game") return beginGame(t.dataset.game);
@@ -1839,7 +2142,9 @@ function addDraft(name) {
     if (act === "guess") return dispatch({ type: "guess", guess: t.dataset.guess });
     if (act === "next-card") return dispatch({ type: "next-card" });
     if (act === "skip") return dispatch({ type: "skip" });
+    if (act === "undo") return dispatch({ type: "undo" });
     if (act === "to-lobby") {
+      noteEveningQuestions();
       if (app.mode === "multi") dispatch({ type: "to-lobby" });
       else if (app.state) { app.state = { ...app.state, phase: "lobby", game: null }; app.screen = "lobby"; render(); }
       return;
@@ -1871,6 +2176,14 @@ function addDraft(name) {
       app.ui.codeValue = norm.code;
       paintSlots();
       if (norm.code.length === 4) joinRoom(norm.code);
+      return;
+    }
+    if (t.id === "settingsName") {
+      if (!app.draft) app.draft = { name: "", icon: "glass", color: "blue" };
+      app.draft.name = t.value;
+      const prev = document.getElementById("settingsPreview");
+      if (prev) prev.textContent = cleanName(t.value, "") || "Jouw naam";
+      persistProfile(app.draft);
       return;
     }
     if (t.id === "styleName") {
@@ -1918,6 +2231,41 @@ function addDraft(name) {
           render();
         }).catch((err) => toast(err.message));
     }
+    if (form.dataset.act === "add-segment") {
+      const label = (document.getElementById("segLabel") || {}).value || "";
+      const text = (document.getElementById("segText") || {}).value || "";
+      const sips = Number((document.getElementById("segSips") || {}).value || 0);
+      const who = (document.getElementById("segWho") || {}).value || "none";
+      api("/api/groups/" + encodeURIComponent(app.groupId) + "/segments", { method: "POST", body: { label, text, sips, who } })
+        .then((data) => { app.groups = app.groups.map((g) => g.id === data.group.id ? data.group : g); render(); })
+        .catch((err) => toast(err.message));
+    }
+    if (form.dataset.act === "admin-login") {
+      const pass = (document.getElementById("adminPass") || {}).value || "";
+      api("/api/admin/login", { method: "POST", body: { password: pass } })
+        .then((data) => {
+          app.adminToken = data.token;
+          app.admin = true;
+          try { sessionStorage.setItem("maatje.admin", data.token); } catch (e) {}
+          app.error = "";
+          render();
+        }).catch((err) => { app.error = err.message; render(); });
+    }
+    if (form.dataset.act === "save-question") {
+      const id = (document.getElementById("qId") || {}).value || "";
+      const body = {
+        text: (document.getElementById("qText") || {}).value || "",
+        cat: (document.getElementById("qCat") || {}).value || "licht",
+        kind: (document.getElementById("qKind") || {}).value || "say",
+        ages: Array.from(document.querySelectorAll("[data-age]:checked")).map((el) => el.dataset.age),
+      };
+      api(id ? "/api/admin/questions/" + encodeURIComponent(id) : "/api/admin/questions", { method: id ? "PATCH" : "POST", body, admin: true })
+        .then((data) => { applyQuestions(data.questions); app.ui.editId = ""; app.error = ""; render(); })
+        .catch((err) => {
+          if (/beheerder/.test(err.message)) { dropAdmin(); render(); }
+          toast(err.message);
+        });
+    }
     if (form.dataset.act === "add-question") {
       const cq = document.getElementById("customQ");
       if (cq) app.ui.customQ = cq.value;
@@ -1943,6 +2291,7 @@ function addDraft(name) {
     app.meId = myId();
     app.profile = loadProfile();
     app.sound = localStorage.getItem("maatje.sound") !== "off";
+    applyTheme(localStorage.getItem("maatje.theme") || "dark");
     app.token = localStorage.getItem("maatje.token") || "";
     const savedAge = localStorage.getItem("maatje.age");
     if (AGES.some((a) => a.id === savedAge)) app.ui.age = savedAge;
@@ -1999,6 +2348,8 @@ function addDraft(name) {
     ready.game.spin = { id: "spin-1", segment: self2, at: 1 };
     const drank = reduce(ready, { type: "next", by: "host-0001" });
     check(drank.players[0].sips === 2 && drank.game.turn === 1 && drank.game.stage === "ready", "2 slokken");
+    const back = reduce(drank, { type: "undo", by: "host-0001" });
+    check(back && back.players[0].sips === 0 && back.game.turn === 0 && back.game.stage === "result", "ongedaan");
     const give = base();
     give.game.stage = "result";
     give.game.spin = { id: "spin-2", segment: SEGMENTS.findIndex((s) => s.id === "give"), at: 1 };

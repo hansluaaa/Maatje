@@ -1,5 +1,51 @@
 {
-  "users": [],
-  "sessions": [],
-  "groups": []
+  "users": [
+    {
+      "id": "9864ecf6-d44c-4972-bfea-4464f8d5969a",
+      "name": "Barrie",
+      "passwordHash": "4f233eacdaa9adfe8c026768737782a2dbb2630f8a4e753d02592114c53f2597",
+      "passwordSalt": "ef34bbdbd5d6f676e0caa8b4fc102a48",
+      "email": "",
+      "googleSub": "",
+      "icon": "chat",
+      "color": "red",
+      "age": "18-20",
+      "createdAt": 1794708321889
+    }
+  ],
+  "sessions": [
+    {
+      "token": "c8ae0724a15e18fcd75c6f561b4d567ed03949cc19a4bfc3",
+      "userId": "9864ecf6-d44c-4972-bfea-4464f8d5969a",
+      "createdAt": 1794708321889
+    },
+    {
+      "token": "f5184e95dc4420020e49b1263d77a75487c7dd6e12e09298",
+      "userId": "9864ecf6-d44c-4972-bfea-4464f8d5969a",
+      "createdAt": 1794708955859
+    }
+  ],
+  "groups": [
+    {
+      "id": "f92d8e26-aadc-4ef6-8d45-d7a50ca16ba4",
+      "name": "Vincent",
+      "code": "MXYP",
+      "ownerId": "9864ecf6-d44c-4972-bfea-4464f8d5969a",
+      "icon": "crown",
+      "color": "mint",
+      "age": "18-20",
+      "activeRoom": "EHRQ",
+      "activeRoomAt": 1794708992308,
+      "members": [
+        {
+          "userId": "9864ecf6-d44c-4972-bfea-4464f8d5969a",
+          "name": "Barrie",
+          "icon": "chat",
+          "color": "red"
+        }
+      ],
+      "questions": [],
+      "createdAt": 1794708967259
+    }
+  ]
 }

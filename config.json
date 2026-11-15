@@ -1,3 +1,714 @@
 {
-  "googleClientId": ""
+  "googleClientId": "",
+  "adminPassword": "maatje",
+  "questions": [
+    {
+      "id": "q01",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Wat was het laatste wat je op je telefoon hebt opgezocht?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q02",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Welk nummer zing je mee, terwijl je het eigenlijk niet goed vindt?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q03",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Wat eet je het liefst als je om twee uur nog wakker bent?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q04",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Welke serie heb je stiekem helemaal uitgekeken?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q05",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Waar zou je morgen heen gaan als de trein gratis was?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q06",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Wat is het enige gerecht dat je echt kunt koken?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q07",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Hoe laat had je vanavond thuis willen zijn?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q08",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Welke app mag van jou wel een week weg?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q09",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Wat is het beste advies dat je ooit genegeerd hebt?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q10",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Welk drankje op tafel kies je als je er nog een mag?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q11",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Liever een weekend zonder muziek, of een weekend zonder je telefoon?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q12",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Welke kleine ergernis wordt bij jou veel te groot?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q13",
+      "cat": "groep",
+      "kind": "point",
+      "text": "Wijs aan: wie is het vaakst te laat?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q14",
+      "cat": "groep",
+      "kind": "point",
+      "text": "Wijs aan: wie stuurt de langste spraakberichten?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q15",
+      "cat": "groep",
+      "kind": "point",
+      "text": "Wijs aan: wie redt zich op een festival zonder powerbank?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q16",
+      "cat": "groep",
+      "kind": "point",
+      "text": "Wijs aan: wie danst het eerst als er muziek opstaat?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q17",
+      "cat": "groep",
+      "kind": "point",
+      "text": "Wijs aan: wie kookt het chaotischst?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q18",
+      "cat": "groep",
+      "kind": "point",
+      "text": "Wijs aan: wie wint een potje kaarten zonder moeite?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q19",
+      "cat": "groep",
+      "kind": "point",
+      "text": "Wijs aan: wie bewaart een geheim het slechtst?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q20",
+      "cat": "groep",
+      "kind": "point",
+      "text": "Wijs aan: wie ken je het minst? Stel diegene één vraag.",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q21",
+      "cat": "groep",
+      "kind": "point",
+      "text": "Wijs aan: wie zegt het eerst ja tegen een slecht plan?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q22",
+      "cat": "groep",
+      "kind": "point",
+      "text": "Wijs aan: wie gaat vanavond als laatste naar huis?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q23",
+      "cat": "groep",
+      "kind": "point",
+      "text": "Wijs aan: wie is het rustigst aan deze tafel?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q24",
+      "cat": "groep",
+      "kind": "point",
+      "text": "Wijs aan: met wie zou je een escape room willen doen?",
+      "ages": [
+        "16-18",
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q25",
+      "cat": "pittig",
+      "kind": "say",
+      "text": "Wat is een rode vlag van jou, in één zin?",
+      "ages": [
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q26",
+      "cat": "pittig",
+      "kind": "say",
+      "text": "Wat is het domste dat je deed om indruk te maken?",
+      "ages": [
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q27",
+      "cat": "pittig",
+      "kind": "say",
+      "text": "Welk gerucht over jou klopt een klein beetje?",
+      "ages": [
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q28",
+      "cat": "pittig",
+      "kind": "say",
+      "text": "Welk excuus gebruik je te vaak?",
+      "ages": [
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q29",
+      "cat": "pittig",
+      "kind": "say",
+      "text": "Wat zeg je niet hardop als je helemaal nuchter bent?",
+      "ages": [
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q30",
+      "cat": "pittig",
+      "kind": "say",
+      "text": "Wat is je slechtste openingszin tot nu toe?",
+      "ages": [
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q31",
+      "cat": "pittig",
+      "kind": "say",
+      "text": "Welke huisregel zou jij vanavond invoeren?",
+      "ages": [
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q32",
+      "cat": "pittig",
+      "kind": "say",
+      "text": "Wat is een mening waar je vrienden het niet mee eens zijn?",
+      "ages": [
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q33",
+      "cat": "pittig",
+      "kind": "say",
+      "text": "Wat deed je een keer en dacht je meteen: waarom?",
+      "ages": [
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q34",
+      "cat": "pittig",
+      "kind": "say",
+      "text": "Welk kinderachtig ding maakt je echt boos?",
+      "ages": [
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q35",
+      "cat": "pittig",
+      "kind": "say",
+      "text": "Wat is je meest nutteloze talent?",
+      "ages": [
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q36",
+      "cat": "pittig",
+      "kind": "say",
+      "text": "Wie aan tafel krijgt van jou het voordeel van de twijfel? Zeg de naam, of drink.",
+      "ages": [
+        "18-20",
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q40",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Welk vak zou je het liefst skippen?",
+      "ages": [
+        "16-18"
+      ]
+    },
+    {
+      "id": "q41",
+      "cat": "groep",
+      "kind": "point",
+      "text": "Wijs aan: wie appt het meest op een schooldag?",
+      "ages": [
+        "16-18"
+      ]
+    },
+    {
+      "id": "q42",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Wat is je slechtste excuus om te laat te komen?",
+      "ages": [
+        "16-18"
+      ]
+    },
+    {
+      "id": "q43",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Welke docent heeft stiekem een goede playlist?",
+      "ages": [
+        "16-18"
+      ]
+    },
+    {
+      "id": "q44",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Wat zet je op je story en haal je daarna weer weg?",
+      "ages": [
+        "16-18",
+        "18-20"
+      ]
+    },
+    {
+      "id": "q45",
+      "cat": "groep",
+      "kind": "point",
+      "text": "Wijs aan: wie maakt als eerste de groepsapp voor een feestje?",
+      "ages": [
+        "16-18",
+        "18-20"
+      ]
+    },
+    {
+      "id": "q46",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Liever een proefwerk of een spreekbeurt?",
+      "ages": [
+        "16-18"
+      ]
+    },
+    {
+      "id": "q47",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Welk nummer mag van jou nooit op een schoolfeest?",
+      "ages": [
+        "16-18"
+      ]
+    },
+    {
+      "id": "q50",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Wat is je standaard bestelling als je uitgaat?",
+      "ages": [
+        "18-20",
+        "20-25"
+      ]
+    },
+    {
+      "id": "q51",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Hoe laat was je echt thuis de laatste keer?",
+      "ages": [
+        "18-20",
+        "20-25"
+      ]
+    },
+    {
+      "id": "q52",
+      "cat": "groep",
+      "kind": "point",
+      "text": "Wijs aan: wie stuurt ‘ik kom eraan’ terwijl die nog thuis is?",
+      "ages": [
+        "18-20",
+        "20-25"
+      ]
+    },
+    {
+      "id": "q53",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Welke studie zou je nu kiezen als je opnieuw mocht?",
+      "ages": [
+        "18-20"
+      ]
+    },
+    {
+      "id": "q54",
+      "cat": "groep",
+      "kind": "point",
+      "text": "Wijs aan: wie blijft het langst hangen na sluitingstijd?",
+      "ages": [
+        "18-20",
+        "20-25"
+      ]
+    },
+    {
+      "id": "q60",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Wat is de eerste app die je opent op een werkdag?",
+      "ages": [
+        "20-25",
+        "25-35"
+      ]
+    },
+    {
+      "id": "q61",
+      "cat": "groep",
+      "kind": "point",
+      "text": "Wijs aan: wie heeft het drukst en doet het minst?",
+      "ages": [
+        "20-25",
+        "25-35"
+      ]
+    },
+    {
+      "id": "q62",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Beschrijf je laatste date in één zin, of sla over.",
+      "ages": [
+        "20-25"
+      ]
+    },
+    {
+      "id": "q63",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Wat koop je te vaak ‘voor de gezelligheid’?",
+      "ages": [
+        "20-25",
+        "25-35"
+      ]
+    },
+    {
+      "id": "q64",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Hoeveel keer snooze je echt?",
+      "ages": [
+        "20-25",
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q70",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Hoe ziet jouw ideale zondag eruit, zonder verplichtingen?",
+      "ages": [
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q71",
+      "cat": "groep",
+      "kind": "point",
+      "text": "Wijs aan: wie regelt altijd de planning?",
+      "ages": [
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q72",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Welk klusje in huis stel je al maanden uit?",
+      "ages": [
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q73",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Welke mening had je op je twintigste en nu niet meer?",
+      "ages": [
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q80",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Wat deed je vroeger op een avond dat je nu niet meer trekt?",
+      "ages": [
+        "35+"
+      ]
+    },
+    {
+      "id": "q81",
+      "cat": "groep",
+      "kind": "point",
+      "text": "Wijs aan: wie gaat als eerste naar huis, en terecht?",
+      "ages": [
+        "25-35",
+        "35+"
+      ]
+    },
+    {
+      "id": "q82",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Welk advies geef je de jongste aan tafel?",
+      "ages": [
+        "35+",
+        "25-35"
+      ]
+    },
+    {
+      "id": "q83",
+      "cat": "licht",
+      "kind": "say",
+      "text": "Wat is je favoriete excuus om een feestje eerder te verlaten?",
+      "ages": [
+        "35+",
+        "25-35"
+      ]
+    }
+  ]
 }
