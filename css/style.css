@@ -903,6 +903,7 @@ h3 { font-size: 26px; margin: 0 0 8px; }
 }
 .modal .field { color: #f4f7fb; }
 .modal .fine, .modal .note { color: #c5d0e0; }
+.auth-error { color: #ffb4b4; background: rgba(180, 40, 40, 0.18); border-radius: 12px; padding: 10px 12px; margin: 0 0 12px; font-size: 14px; }
 .panel p, .note, .fine { overflow-wrap: anywhere; }
 .panel ul { margin: 0 0 16px; padding-left: 18px; }
 .panel li { margin: 6px 0; }
@@ -985,6 +986,7 @@ html[data-theme="light"] .modal .panel { background: #fff; color: #142033; }
 html[data-theme="light"] .modal .field,
 html[data-theme="light"] .modal .fine,
 html[data-theme="light"] .modal .note { color: #3d4d63; }
+html[data-theme="light"] .auth-error { color: #9f1239; background: #ffe4e6; }
 html[data-theme="light"] .nav button { color: #5c6d84; }
 html[data-theme="light"] .nav button.is-on { color: #142033; border-color: rgba(20, 32, 51, 0.22); background: rgba(20, 32, 51, 0.04); }
 html[data-theme="light"] .you-pill { background: #f4f7fb; }

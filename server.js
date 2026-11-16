@@ -373,7 +373,8 @@ const server = http.createServer(async (req, res) => {
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }); res.end("niet gevonden"); return; }
     const ext = path.extname(file).toLowerCase();
-    res.writeHead(200, { "Content-Type": types[ext] || "application/octet-stream", "Cache-Control": "no-cache" });
+    const cache = ext === ".html" || ext === ".js" || ext === ".css" ? "no-store" : "no-cache";
+    res.writeHead(200, { "Content-Type": types[ext] || "application/octet-stream", "Cache-Control": cache });
     res.end(data);
   });
 });
@@ -385,7 +386,7 @@ async function handleApi(req, res, url) {
   const pathName = url.pathname;
 
   if (req.method === "GET" && pathName === "/api/config") {
-    send(res, 200, { googleClientId: config.googleClientId || "" });
+    send(res, 200, { googleClientId: config.googleClientId || "", mail: mailReady(config) });
     return;
   }
   if (req.method === "GET" && pathName === "/api/questions") {

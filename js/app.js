@@ -1549,26 +1549,41 @@
 
   function api(path, opts) {
     const headers = { "Content-Type": "application/json" };
-    if (app.token) headers.Authorization = "Bearer " + app.token;
+    if (app.token && !(opts && opts.anon)) headers.Authorization = "Bearer " + app.token;
     if (opts && opts.admin && app.adminToken) headers["X-Admin-Token"] = app.adminToken;
     return fetch(path, { method: (opts && opts.method) || "GET", headers, body: opts && opts.body ? JSON.stringify(opts.body) : undefined })
       .then(async (res) => {
         const text = await res.text();
         let data = {};
         try { data = text ? JSON.parse(text) : {}; } catch (e) { data = {}; }
-        if (!res.ok) throw new Error(data.error || "Account aanmaken lukte niet (" + res.status + ").");
+        if (res.status === 401 && /^(Niet ingelogd|Log eerst in\.)$/.test(data.error || "")) dropSession();
+        if (!res.ok) throw new Error(data.error || "De server gaf geen duidelijk antwoord (" + res.status + ").");
         return data;
+      })
+      .catch((err) => {
+        if (err && err.message && !/failed to fetch|networkerror|load failed/i.test(err.message)) throw err;
+        throw new Error("Geen verbinding met de accountserver. Open de site via Start-Maatje op localhost:8080.");
       });
+  }
+  function dropSession() {
+    app.token = "";
+    app.account = null;
+    app.groups = [];
+    try { localStorage.removeItem("maatje.token"); } catch (e) {}
   }
   function setSession(data) {
     app.token = data.token || app.token;
-    if (data.token) { try { localStorage.setItem("maatje.token", data.token); } catch (e) {} }
-    if (data.user) {
-      app.account = data.user;
-      app.profile = { name: cleanName(data.user.name, "Speler"), icon: validIcon(data.user.icon), color: validColor(data.user.color), photo: cleanPhoto(data.user.photo) };
-      localStorage.setItem("maatje.profile", JSON.stringify(app.profile));
-      localStorage.setItem("maatje.welcomed", "1");
-      if (AGES.some((a) => a.id === data.user.age)) app.ui.age = data.user.age;
+    try {
+      if (data.token) localStorage.setItem("maatje.token", data.token);
+      if (data.user) {
+        app.account = data.user;
+        app.profile = { name: cleanName(data.user.name, "Speler"), icon: validIcon(data.user.icon), color: validColor(data.user.color), photo: cleanPhoto(data.user.photo) };
+        localStorage.setItem("maatje.profile", JSON.stringify(app.profile));
+        localStorage.setItem("maatje.welcomed", "1");
+        if (AGES.some((a) => a.id === data.user.age)) app.ui.age = data.user.age;
+      }
+    } catch (e) {
+      if (data.user) app.account = data.user;
     }
     if (data.groups) app.groups = data.groups;
     app.overlay = null;
@@ -1648,8 +1663,10 @@
       if (app.config.googleClientId) loadGoogle();
       if (!app.token) return null;
       return api("/api/me").then((data) => setSession({ token: app.token, user: data.user, groups: data.groups }));
-    }).catch(() => {
-      if (app.token) { app.token = ""; localStorage.removeItem("maatje.token"); }
+    }).catch((err) => {
+      const gone = err && /Niet ingelogd|Log eerst in/.test(err.message);
+      if (app.token || gone) dropSession();
+      if (gone) toast("Dit account is gewist. Maak een nieuw account.");
     }).then(() => api("/api/questions").then((data) => applyQuestions(data && data.questions)).catch(() => {}))
       .then(() => api("/api/memes").then((data) => applyMemes(data && data.memes)).catch(() => {}))
       .then(() => { app.authReady = true; render(); });
@@ -1701,7 +1718,7 @@
       if (password.length < 4) { app.error = "Kies een wachtwoord van minstens 4 tekens."; toast(app.error); render(); return; }
     }
     const body = register ? { name, email, password } : { name, email: name, password };
-    api(register ? "/api/register" : "/api/login", { method: "POST", body })
+    api(register ? "/api/register" : "/api/login", { method: "POST", body, anon: true })
       .then((data) => {
         app.ui.authPass = "";
         app.error = "";
@@ -1730,12 +1747,9 @@
   }
   function logout() {
     const token = app.token;
-    app.token = "";
-    app.account = null;
-    app.groups = [];
+    dropSession();
     app.groupId = "";
-    localStorage.removeItem("maatje.token");
-    if (token) api("/api/logout", { method: "POST" }).catch(() => {});
+    if (token) fetch("/api/logout", { method: "POST", headers: { Authorization: "Bearer " + token } }).catch(() => {});
     app.screen = "home";
     app.overlay = null;
     render();
@@ -1788,10 +1802,10 @@
     const google = !reg && app.config.googleClientId
       ? `<div id="googleSlot"></div><p class="or">of met e-mail</p>`
       : (!reg ? `<p class="note">Google zet je aan door een client-id in config.json te zetten.</p>` : "");
-    const hint = app.ui.authHint || (reg ? "Je krijgt een mail om het adres te bevestigen." : "Kijken en op één telefoon spelen mag zonder account.");
+    const hint = app.ui.authHint || (reg ? (app.config && app.config.mail ? "Je krijgt een mail om het adres te bevestigen." : "Daarna ben je meteen ingelogd.") : "Kijken en op één telefoon spelen mag zonder account.");
     const emailField = reg ? `<label class="field">E-mail<input id="authEmail" type="email" maxlength="80" autocomplete="email" value="${esc(app.ui.authEmail || "")}"></label>` : "";
-    const err = app.error ? `<p class="fine">${esc(app.error)}</p>` : "";
-    return `<div class="modal" data-act="close-login"><div class="panel auth" data-act="stop" role="dialog" aria-modal="true"><h3>${reg ? "Account maken" : "Inloggen"}</h3><p class="fine">${esc(hint)}</p><form data-act="${reg ? "register" : "login-form"}" class="auth-grid"><label class="field">${reg ? "Naam" : "E-mail of naam"}<input id="authName" maxlength="80" autocomplete="username" value="${esc(app.ui.authName || "")}"></label>${emailField}<label class="field">Wachtwoord<input id="authPass" type="password" maxlength="64" autocomplete="${reg ? "new-password" : "current-password"}" value="${esc(app.ui.authPass || "")}"></label><button class="btn btn-primary" type="button" data-act="${reg ? "do-register" : "do-login"}">${reg ? "Account maken" : "Inloggen"}</button></form>${err}${google}<button type="button" class="btn btn-text" data-act="auth-toggle">${reg ? "Ik heb al een account" : "Nog geen account"}</button><button type="button" class="btn btn-ghost" data-act="close-login">Sluiten</button></div></div>`;
+    const err = app.error ? `<p class="auth-error">${esc(app.error)}</p>` : "";
+    return `<div class="modal" data-act="close-login"><div class="panel auth" data-act="stop" role="dialog" aria-modal="true"><h3>${reg ? "Account maken" : "Inloggen"}</h3><p class="fine">${esc(hint)}</p>${err}<form data-act="${reg ? "register" : "login-form"}" class="auth-grid"><label class="field">${reg ? "Naam" : "E-mail of naam"}<input id="authName" maxlength="80" autocomplete="username" value="${esc(app.ui.authName || "")}"></label>${emailField}<label class="field">Wachtwoord<input id="authPass" type="password" maxlength="64" autocomplete="${reg ? "new-password" : "current-password"}" value="${esc(app.ui.authPass || "")}"></label><button class="btn btn-primary" type="button" data-act="${reg ? "do-register" : "do-login"}">${reg ? "Account maken" : "Inloggen"}</button></form>${google}<button type="button" class="btn btn-text" data-act="auth-toggle">${reg ? "Ik heb al een account" : "Nog geen account"}</button><button type="button" class="btn btn-ghost" data-act="close-login">Sluiten</button></div></div>`;
   }
   function groupTile(g) {
     const members = g.members || [];
