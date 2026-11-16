@@ -940,8 +940,10 @@
     return { id: app.meId, name: p.name, icon: p.icon, color: p.color, photo: cleanPhoto(p.photo), sips: 0 };
   }
   function saveProfileLocal() {
-    localStorage.setItem("maatje.profile", JSON.stringify(app.profile));
-    localStorage.setItem("maatje.welcomed", "1");
+    try {
+      localStorage.setItem("maatje.profile", JSON.stringify(app.profile));
+      localStorage.setItem("maatje.welcomed", "1");
+    } catch (e) {}
   }
   function persistProfile(p) {
     const previous = cleanPhoto(app.profile && app.profile.photo);
@@ -1551,14 +1553,16 @@
     if (opts && opts.admin && app.adminToken) headers["X-Admin-Token"] = app.adminToken;
     return fetch(path, { method: (opts && opts.method) || "GET", headers, body: opts && opts.body ? JSON.stringify(opts.body) : undefined })
       .then(async (res) => {
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || "Het lukte niet. Vernieuw de pagina en probeer opnieuw.");
+        const text = await res.text();
+        let data = {};
+        try { data = text ? JSON.parse(text) : {}; } catch (e) { data = {}; }
+        if (!res.ok) throw new Error(data.error || "Account aanmaken lukte niet (" + res.status + ").");
         return data;
       });
   }
   function setSession(data) {
     app.token = data.token || app.token;
-    if (data.token) localStorage.setItem("maatje.token", data.token);
+    if (data.token) { try { localStorage.setItem("maatje.token", data.token); } catch (e) {} }
     if (data.user) {
       app.account = data.user;
       app.profile = { name: cleanName(data.user.name, "Speler"), icon: validIcon(data.user.icon), color: validColor(data.user.color), photo: cleanPhoto(data.user.photo) };
@@ -2291,7 +2295,9 @@
     const s = app.state;
     const g = s && s.game;
     const gameFp = g ? [g.id, g.stage, g.turn, g.spin && g.spin.id, g.targetId, g.choice, g.cursor, g.index, g.outcome, g.note, g.banner, g.category, g.round].join(".") : "";
-    return [view(), app.ui.crop ? 1 : 0, app.ui.camera ? 1 : 0, app.tv ? 1 : 0, app.ui.how || "", app.conn, app.error || "", app.sound ? 1 : 0, app.admin ? 1 : 0, app.questionsRev, app.memesRev, app.ui.adminTab || "", app.ui.editId || "", app.ui.noRoom ? 1 : 0, app.ui.stale ? 1 : 0, app.ui.confirmLeave ? 1 : 0, app.ui.rules || "", app.ui.filter || "", app.ui.age || "", app.ui.joinWait || "", app.overlay || "", app.ui.authMode || "", app.ui.previewLink || "", app.screen || "", app.theme || "", app.groupId || "", app.account ? app.account.id + (app.account.verified === false ? "u" : "v") : "", (app.groups || []).map((g) => g.id + g.activeRoom + (g.questions || []).length + ":" + (g.segments || []).length + ":" + (g.evenings || []).length).join(","), app.roomCode || "", resultVisible() ? 1 : 0, app.profile ? app.profile.name + app.profile.icon + app.profile.color + (app.profile.photo ? app.profile.photo.length + app.profile.photo.slice(-8) : "") : "", app.draft ? app.draft.icon + app.draft.color + (app.draft.photo ? app.draft.photo.length : "") : "", (app.draftPlayers || []).map((p) => p.id + p.icon + p.color).join(","), s ? s.rev + ":" + s.gen + ":" + s.phase + ":" + s.hostId + ":" + s.players.map((p) => p.id + p.name + p.sips + p.icon + p.color).join("/") + ":" + gameFp : ""].join("~");
+    const groups = Array.isArray(app.groups) ? app.groups : [];
+    const players = s && Array.isArray(s.players) ? s.players : [];
+    return [view(), app.ui.crop ? 1 : 0, app.ui.camera ? 1 : 0, app.tv ? 1 : 0, app.ui.how || "", app.conn, app.error || "", app.sound ? 1 : 0, app.admin ? 1 : 0, app.questionsRev, app.memesRev, app.ui.adminTab || "", app.ui.editId || "", app.ui.noRoom ? 1 : 0, app.ui.stale ? 1 : 0, app.ui.confirmLeave ? 1 : 0, app.ui.rules || "", app.ui.filter || "", app.ui.age || "", app.ui.joinWait || "", app.overlay || "", app.ui.authMode || "", app.ui.previewLink || "", app.screen || "", app.theme || "", app.groupId || "", app.account ? app.account.id + (app.account.verified === false ? "u" : "v") : "", groups.map((g) => g.id + (g.activeRoom || "") + ((g.questions || []).length) + ":" + ((g.segments || []).length) + ":" + ((g.evenings || []).length)).join(","), app.roomCode || "", resultVisible() ? 1 : 0, app.profile ? app.profile.name + app.profile.icon + app.profile.color + (app.profile.photo ? app.profile.photo.length + app.profile.photo.slice(-8) : "") : "", app.draft ? app.draft.icon + app.draft.color + (app.draft.photo ? app.draft.photo.length : "") : "", (app.draftPlayers || []).map((p) => p.id + p.icon + p.color).join(","), s ? s.rev + ":" + s.gen + ":" + s.phase + ":" + s.hostId + ":" + players.map((p) => p.id + p.name + p.sips + p.icon + p.color).join("/") + ":" + gameFp : ""].join("~");
   }
   function captureForm() {
     const a = document.activeElement;
@@ -3044,8 +3050,13 @@ function addDraft(name) {
   else if (typeof document !== "undefined") {
     try { boot(); } catch (err) {
       console.error(err);
+      try { localStorage.removeItem("maatje.token"); localStorage.removeItem("maatje.profile"); } catch (e) {}
       const root = document.getElementById("app");
-      if (root) root.textContent = "Laden mislukt. Vernieuw de pagina.";
+      if (!root) return;
+      try { boot(); }
+      catch (err2) {
+        root.textContent = "Laden mislukt: " + ((err2 && err2.message) || "onbekend");
+      }
     }
   }
 })();

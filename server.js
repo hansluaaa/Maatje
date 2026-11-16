@@ -99,7 +99,18 @@ function saveStore(store) {
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   const tmp = storePath + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(store, null, 2));
-  fs.renameSync(tmp, storePath);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try { fs.renameSync(tmp, storePath); return; }
+    catch (err) {
+      try {
+        fs.copyFileSync(tmp, storePath);
+        fs.unlinkSync(tmp);
+        return;
+      } catch (copyErr) {
+        if (attempt === 4) throw new Error("Account opslaan lukte niet. Probeer het nog een keer.");
+      }
+    }
+  }
 }
 function readRaw(req, limit, tooBig) {
   return new Promise((resolve, reject) => {
