@@ -1552,7 +1552,7 @@
     return fetch(path, { method: (opts && opts.method) || "GET", headers, body: opts && opts.body ? JSON.stringify(opts.body) : undefined })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || "Mislukt");
+        if (!res.ok) throw new Error(data.error || "Het lukte niet. Vernieuw de pagina en probeer opnieuw.");
         return data;
       });
   }
@@ -1691,6 +1691,11 @@
     const name = app.ui.authName || "";
     const email = app.ui.authEmail || "";
     const password = app.ui.authPass || "";
+    if (register) {
+      if (name.trim().length < 2) { app.error = "Kies een naam van minstens 2 letters."; toast(app.error); render(); return; }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) { app.error = "Vul een echt e-mailadres in, bijvoorbeeld naam@mail.nl."; toast(app.error); render(); return; }
+      if (password.length < 4) { app.error = "Kies een wachtwoord van minstens 4 tekens."; toast(app.error); render(); return; }
+    }
     const body = register ? { name, email, password } : { name, email: name, password };
     api(register ? "/api/register" : "/api/login", { method: "POST", body })
       .then((data) => {
@@ -1699,7 +1704,7 @@
         if (data.pending) { showCheckMail(data.email, data.previewLink); return; }
         setSession(data);
         app.ui.authHint = "";
-        toast(data.user && data.user.verified === false ? "Ingelogd. Bevestig je mail om met een code te spelen." : "Welkom terug");
+        toast(register ? "Account gemaakt. Je bent ingelogd." : (data.user && data.user.verified === false ? "Ingelogd. Bevestig je mail om met een code te spelen." : "Welkom terug"));
         render();
       })
       .catch((err) => { app.error = err.message; toast(err.message); render(); });
@@ -1762,7 +1767,7 @@
   function homeGroups() {
     if (location.protocol === "file:") return "";
     if (!app.account) {
-      return `<section class="section-head"><p class="kicker">Groepen</p><h2>Speel vaker met dezelfde mensen.</h2><p class="lede">Maak een account, start een groep en bewaar jullie eigen vragen.</p><div class="stack" style="max-width:280px;margin-top:12px"><button type="button" class="btn btn-primary" data-act="login">Account maken</button></div></section>`;
+      return `<section class="section-head"><p class="kicker">Groepen</p><h2>Speel vaker met dezelfde mensen.</h2><p class="lede">Maak een account, start een groep en bewaar jullie eigen vragen.</p><div class="stack" style="max-width:280px;margin-top:12px"><button type="button" class="btn btn-primary" data-act="signup">Account maken</button></div></section>`;
     }
     const cards = (app.groups || []).map((g) => `<button type="button" class="group-card gcard" data-act="open-group" data-id="${esc(g.id)}"><span class="kicker">${esc(g.code)}</span><h3>${esc(g.name)}</h3><div class="faces">${(g.members || []).slice(0, 8).map((m) => `<span class="ava" style="--c:${colorHex(m.color)}">${faceHtml(m)}</span>`).join("")}</div><span class="fine">${(g.members || []).length} ${g.members.length === 1 ? "persoon" : "mensen"} · vragen ${esc((AGES.find((a) => a.id === g.age) || {}).label || "")}</span></button>`).join("");
     return `<section><div class="section-head"><p class="kicker">Jouw groepen</p><h2>${app.groups.length ? "Waar je vaker mee speelt." : "Nog geen groep."}</h2></div><div class="group-grid">${cards}<button type="button" class="group-card gcard" data-act="groups"><h3>Nieuwe groep</h3><p>Of doe mee met een groepscode.</p></button></div></section>`;
@@ -2624,6 +2629,7 @@ function addDraft(name) {
       return;
     }
     if (act === "login") { app.overlay = "login"; app.ui.authMode = "login"; app.error = ""; render(); return; }
+    if (act === "signup") { app.overlay = "login"; app.ui.authMode = "register"; app.error = ""; render(); return; }
     if (act === "do-login") { authSubmit(false); return; }
     if (act === "do-register") { authSubmit(true); return; }
     if (act === "close-login") { app.overlay = null; app.ui.authHint = ""; render(); return; }

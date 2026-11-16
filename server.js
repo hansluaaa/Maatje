@@ -348,7 +348,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", "http://localhost");
   if (url.pathname.startsWith("/api/")) {
     try { await handleApi(req, res, url); }
-    catch (err) { send(res, 400, { error: err.message || "Mislukt" }); }
+    catch (err) { send(res, 400, { error: (err && err.message) || "Het lukte niet. Probeer het nog een keer." }); }
     return;
   }
   let rel = decodeURIComponent(url.pathname);
@@ -499,13 +499,22 @@ async function handleApi(req, res, url) {
     const password = String(body.password || "");
     if (name.length < 2) throw new Error("Kies een naam van minstens 2 letters.");
     if (password.length < 4) throw new Error("Kies een wachtwoord van minstens 4 tekens.");
-    if (store.users.some((u) => u.name.toLowerCase() === name.toLowerCase())) throw new Error("Die naam is al bezet.");
+    if (store.users.some((u) => String(u.name || "").toLowerCase() === name.toLowerCase())) throw new Error("Die naam is al bezet. Log in, of kies een andere naam.");
     const pw = hashPassword(password);
     const email = cleanEmail(body.email);
-    if (!email) throw new Error("Vul een echt e-mailadres in.");
-    if (store.users.some((u) => u.email && u.email.toLowerCase() === email)) throw new Error("Dat e-mailadres is al gebruikt.");
+    if (!email) throw new Error("Vul een echt e-mailadres in, bijvoorbeeld naam@mail.nl.");
+    if (store.users.some((u) => u.email && String(u.email).toLowerCase() === email)) throw new Error("Dat e-mailadres is al gebruikt. Log in met die naam.");
     const user = { id: crypto.randomUUID(), name, passwordHash: pw.hash, passwordSalt: pw.salt, email, verified: false, verifyToken: crypto.randomBytes(24).toString("hex"), googleSub: "", icon: "glass", color: "blue", age: "20-25", createdAt: Date.now() };
     store.users.push(user);
+    if (!mailReady(config)) {
+      user.verified = true;
+      user.verifyToken = "";
+      const token = issueSession(store, user.id);
+      saveStore(store);
+      const groups = store.groups.filter((g) => (g.members || []).some((m) => m.userId === user.id)).map(publicGroup);
+      send(res, 200, { token, user: publicUser(user), groups, mailed: false });
+      return;
+    }
     let delivery;
     try { delivery = await deliverVerify(config, req, user); }
     catch (err) { delivery = { mailed: false, previewLink: originOf(req) + "/?verify=" + user.verifyToken, mailError: err.message }; }
