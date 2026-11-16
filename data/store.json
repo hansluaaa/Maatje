@@ -10,7 +10,8 @@
       "icon": "chat",
       "color": "red",
       "age": "18-20",
-      "createdAt": 1794708321889
+      "createdAt": 1794708321889,
+      "photo": ""
     }
   ],
   "sessions": [
@@ -46,7 +47,8 @@
           "userId": "9864ecf6-d44c-4972-bfea-4464f8d5969a",
           "name": "Barrie",
           "icon": "chat",
-          "color": "red"
+          "color": "red",
+          "photo": ""
         }
       ],
       "questions": [],

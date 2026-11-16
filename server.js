@@ -101,13 +101,13 @@ function saveStore(store) {
   fs.writeFileSync(tmp, JSON.stringify(store, null, 2));
   fs.renameSync(tmp, storePath);
 }
-function readRaw(req, limit) {
+function readRaw(req, limit, tooBig) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
     req.on("data", (chunk) => {
       size += chunk.length;
-      if (size > limit) { req.destroy(); reject(new Error("Foto is te groot. Max 8 MB.")); return; }
+      if (size > limit) { req.destroy(); reject(new Error(tooBig || "Foto is te groot. Max 8 MB.")); return; }
       chunks.push(chunk);
     });
     req.on("end", () => resolve(Buffer.concat(chunks)));
@@ -147,7 +147,7 @@ function tokenOf(req) {
   return m ? m[1] : "";
 }
 function publicUser(user) {
-  return { id: user.id, name: user.name, email: user.email || "", verified: user.verified !== false, icon: user.icon || "glass", color: user.color || "blue", age: user.age || "20-25", google: !!user.googleSub };
+  return { id: user.id, name: user.name, email: user.email || "", verified: user.verified !== false, icon: user.icon || "glass", color: user.color || "blue", photo: cleanAvatar(user.photo), age: user.age || "20-25", google: !!user.googleSub };
 }
 function cleanEmail(value) {
   const email = String(value || "").trim().toLowerCase().slice(0, 80);
@@ -276,7 +276,7 @@ function publicGroup(group) {
     age: group.age || "20-25",
     activeRoom: group.activeRoom || "",
     activeRoomAt: group.activeRoomAt || 0,
-    members: (group.members || []).map((m) => ({ userId: m.userId, name: m.name, icon: m.icon, color: m.color })),
+    members: (group.members || []).map((m) => ({ userId: m.userId, name: m.name, icon: m.icon, color: m.color, photo: cleanAvatar(m.photo) })),
     questions: (group.questions || []).map((q) => ({ id: q.id, text: q.text, by: q.by || "" })),
     segments: (group.segments || []).map((s) => ({ id: s.id, label: s.label, text: s.text || "", sips: s.sips | 0, who: s.who || "self" })),
     evenings: (group.evenings || []).slice(-12).map((e) => ({
@@ -330,13 +330,17 @@ function issueSession(store, userId) {
   if (store.sessions.length > 400) store.sessions = store.sessions.slice(-400);
   return token;
 }
+function cleanAvatar(value) {
+  const url = String(value || "");
+  return /^\/media\/avatars\/ava-[a-z0-9-]+\.jpg$/i.test(url) ? url : "";
+}
 function memberFrom(user) {
-  return { userId: user.id, name: user.name, icon: user.icon || "glass", color: user.color || "blue" };
+  return { userId: user.id, name: user.name, icon: user.icon || "glass", color: user.color || "blue", photo: cleanAvatar(user.photo) };
 }
 function syncMember(store, user) {
   for (const group of store.groups) {
     const m = (group.members || []).find((x) => x.userId === user.id);
-    if (m) { m.name = user.name; m.icon = user.icon; m.color = user.color; }
+    if (m) { m.name = user.name; m.icon = user.icon; m.color = user.color; m.photo = cleanAvatar(user.photo); }
   }
 }
 
@@ -583,6 +587,24 @@ async function handleApi(req, res, url) {
   }
   if (!me) { send(res, 401, { error: "Log eerst in." }); return; }
 
+  if (req.method === "POST" && pathName === "/api/me/photo") {
+    const raw = await readRaw(req, 2 * 1024 * 1024, "Foto is te groot.");
+    let body = {};
+    try { body = JSON.parse(raw.toString("utf8")); } catch (e) { throw new Error("Upload mislukt."); }
+    const buf = Buffer.from(String(body.data || ""), "base64");
+    const isJpeg = buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+    if (!isJpeg || buf.length < 100 || buf.length > 400000) throw new Error("Alleen een jpg-foto, niet te groot.");
+    const safe = String(me.id).replace(/[^a-z0-9-]/gi, "").slice(0, 40);
+    const dir = path.join(root, "media", "avatars");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "ava-" + safe + ".jpg"), buf);
+    me.photo = "/media/avatars/ava-" + safe + ".jpg";
+    syncMember(store, me);
+    saveStore(store);
+    const groups = store.groups.filter((g) => (g.members || []).some((m) => m.userId === me.id)).map(publicGroup);
+    send(res, 200, { photo: me.photo, user: publicUser(me), groups });
+    return;
+  }
   if (req.method === "PATCH" && pathName === "/api/me") {
     const body = await readBody(req);
     if (body.name) {
@@ -594,6 +616,15 @@ async function handleApi(req, res, url) {
     if (body.icon) me.icon = String(body.icon).slice(0, 24);
     if (body.color) me.color = String(body.color).slice(0, 24);
     if (body.age) me.age = String(body.age).slice(0, 12);
+    if (body.photo === "") {
+      const old = cleanAvatar(me.photo);
+      me.photo = "";
+      if (old) {
+        const file = path.resolve(root, old.replace(/^\/+/, ""));
+        const dir = path.resolve(root, "media", "avatars");
+        if (file.startsWith(dir + path.sep)) fs.unlink(file, () => {});
+      }
+    }
     syncMember(store, me);
     saveStore(store);
     const groups = store.groups.filter((g) => (g.members || []).some((m) => m.userId === me.id)).map(publicGroup);

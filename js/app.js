@@ -38,18 +38,18 @@
   }));
 
   const SEGMENTS = [
-    { id: "all", label: "Allemaal", emoji: "🍻", fg: "#fff", bg: "#3d8bfd", needs: "" },
-    { id: "self2", label: "2 slok", emoji: "✌️", fg: "#fff", bg: "#2f6fed", needs: "" },
-    { id: "give", label: "Weggeven", emoji: "👉", fg: "#fff", bg: "#ff4d6d", needs: "target" },
-    { id: "left", label: "Links", emoji: "◀️", fg: "#06281f", bg: "#3ddec0", needs: "" },
-    { id: "right", label: "Rechts", emoji: "▶️", fg: "#1a1208", bg: "#f5c518", needs: "" },
-    { id: "water", label: "Waterval", emoji: "🌊", fg: "#fff", bg: "#7c5cbf", needs: "" },
-    { id: "cat", label: "Thema", emoji: "🎲", fg: "#062028", bg: "#7dd3fc", needs: "" },
-    { id: "free", label: "Vrij", emoji: "⭐", fg: "#fff", bg: "#2457c5", needs: "" },
-    { id: "mate", label: "Maatje", emoji: "🤝", fg: "#fff", bg: "#e84393", needs: "target" },
-    { id: "story", label: "Verhaal", emoji: "💬", fg: "#06281f", bg: "#7dcea0", needs: "choice" },
-    { id: "except", label: "Behalve", emoji: "🙃", fg: "#1a1208", bg: "#f0d060", needs: "" },
-    { id: "again", label: "Opnieuw", emoji: "🔁", fg: "#fff", bg: "#5b4b8a", needs: "" },
+    { id: "all", label: "Allemaal", emoji: "🍻", fg: "#fff", bg: "#2563eb", needs: "" },
+    { id: "self2", label: "2 slok", emoji: "✌️", fg: "#fff", bg: "#6d28d9", needs: "" },
+    { id: "give", label: "Weggeven", emoji: "👉", fg: "#fff", bg: "#be185d", needs: "target" },
+    { id: "left", label: "Links", emoji: "◀️", fg: "#fff", bg: "#0f766e", needs: "" },
+    { id: "right", label: "Rechts", emoji: "▶️", fg: "#fff", bg: "#c2410c", needs: "" },
+    { id: "water", label: "Waterval", emoji: "🌊", fg: "#fff", bg: "#4338ca", needs: "" },
+    { id: "cat", label: "Thema", emoji: "🎲", fg: "#fff", bg: "#0e7490", needs: "" },
+    { id: "free", label: "Vrij", emoji: "⭐", fg: "#fff", bg: "#1d4ed8", needs: "" },
+    { id: "mate", label: "Maatje", emoji: "🤝", fg: "#fff", bg: "#a21caf", needs: "target" },
+    { id: "story", label: "Verhaal", emoji: "💬", fg: "#fff", bg: "#047857", needs: "choice" },
+    { id: "except", label: "Behalve", emoji: "🙃", fg: "#fff", bg: "#b45309", needs: "" },
+    { id: "again", label: "Opnieuw", emoji: "🔁", fg: "#fff", bg: "#4f46e5", needs: "" },
   ];
 
   const CATEGORIES = ["biermerken", "frisdrank", "films", "series", "hoofdsteden", "snacks", "automerken", "sporten", "apps", "dieren", "landen", "liedjes", "beroepen", "schoolvakken", "ijsjes"];
@@ -175,6 +175,7 @@
     afterStyle: null,
     mode: null,
     isHost: false,
+    tv: false,
     roomCode: "",
     state: null,
     conn: "off",
@@ -207,6 +208,7 @@
       groupCode: "",
       customQ: "",
       codeValue: "",
+      how: "",
       addName: "",
       rules: "",
       confirmLeave: false,
@@ -249,6 +251,178 @@
   function validColor(id) { return COLORS.some((c) => c.id === id) ? id : "blue"; }
   function colorHex(id) { return (COLORS.find((c) => c.id === id) || COLORS[1]).hex; }
   function iconSvg(id) { return (ICONS.find((i) => i.id === id) || ICONS[0]).svg; }
+  function cleanPhoto(value) {
+    const url = String(value || "");
+    if (/^\/media\/avatars\/ava-[a-z0-9-]+\.jpg$/i.test(url)) return url;
+    if (/^data:image\/jpeg;base64,[a-z0-9+/=]+$/i.test(url) && url.length < 140000) return url;
+    return "";
+  }
+  function faceHtml(person) {
+    const photo = cleanPhoto(person && person.photo);
+    if (photo) return `<img class="face-photo" src="${esc(photo)}" alt="">`;
+    return iconSvg(person && person.icon);
+  }
+  function openCrop(file, source) {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      if (app.ui.crop && app.ui.crop.url) URL.revokeObjectURL(app.ui.crop.url);
+      app.ui.crop = { url, source, nw: img.naturalWidth || img.width, nh: img.naturalHeight || img.height, zoom: 1, x: 0, y: 0, placed: false };
+      render();
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); toast("Deze foto lukt niet."); };
+    img.src = url;
+  }
+  function closeCrop() {
+    if (app.ui.crop && app.ui.crop.url) URL.revokeObjectURL(app.ui.crop.url);
+    app.ui.crop = null;
+  }
+  function cropCover(c, box) {
+    const scale = Math.max(box / c.nw, box / c.nh) * c.zoom;
+    return { w: c.nw * scale, h: c.nh * scale };
+  }
+  function clampCrop(c, box) {
+    const size = cropCover(c, box);
+    c.x = Math.min(0, Math.max(box - size.w, c.x));
+    c.y = Math.min(0, Math.max(box - size.h, c.y));
+    return size;
+  }
+  function bindCrop() {
+    const box = document.getElementById("cropBox");
+    const img = document.getElementById("cropImg");
+    const zoom = document.getElementById("cropZoom");
+    const c = app.ui.crop;
+    if (!box || !img || !c) return;
+    const place = () => {
+      const size = clampCrop(c, box.clientWidth || 280);
+      img.style.width = size.w + "px";
+      img.style.height = size.h + "px";
+      img.style.left = c.x + "px";
+      img.style.top = c.y + "px";
+    };
+    if (!c.placed) {
+      const size = cropCover(c, box.clientWidth || 280);
+      c.x = ((box.clientWidth || 280) - size.w) / 2;
+      c.y = ((box.clientWidth || 280) - size.h) / 2;
+      c.placed = true;
+    }
+    place();
+    let drag = null;
+    box.onpointerdown = (e) => {
+      if (e.button != null && e.button !== 0) return;
+      drag = { id: e.pointerId, x: e.clientX, y: e.clientY, ox: c.x, oy: c.y };
+      box.setPointerCapture(e.pointerId);
+    };
+    box.onpointermove = (e) => {
+      if (!drag || drag.id !== e.pointerId) return;
+      c.x = drag.ox + (e.clientX - drag.x);
+      c.y = drag.oy + (e.clientY - drag.y);
+      place();
+    };
+    box.onpointerup = box.onpointercancel = () => { drag = null; };
+    if (zoom) {
+      zoom.value = String(c.zoom);
+      zoom.oninput = () => {
+        const boxSize = box.clientWidth || 280;
+        const before = cropCover(c, boxSize);
+        const cx = boxSize / 2 - c.x;
+        const cy = boxSize / 2 - c.y;
+        c.zoom = Math.min(3, Math.max(1, Number(zoom.value) || 1));
+        const after = cropCover(c, boxSize);
+        c.x = boxSize / 2 - cx * (after.w / before.w);
+        c.y = boxSize / 2 - cy * (after.h / before.h);
+        place();
+      };
+    }
+  }
+  function applyCrop() {
+    const c = app.ui.crop;
+    const box = document.getElementById("cropBox");
+    const img = document.getElementById("cropImg");
+    if (!c || !box || !img) return;
+    const boxSize = box.clientWidth || 280;
+    const size = clampCrop(c, boxSize);
+    const sx = Math.max(0, (-c.x / size.w) * c.nw);
+    const sy = Math.max(0, (-c.y / size.h) * c.nh);
+    const sw = Math.min(c.nw - sx, (boxSize / size.w) * c.nw);
+    const sh = Math.min(c.nh - sy, (boxSize / size.h) * c.nh);
+    const canvas = document.createElement("canvas");
+    canvas.width = 256;
+    canvas.height = 256;
+    canvas.getContext("2d").drawImage(img, sx, sy, sw, sh, 0, 0, 256, 256);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+    const source = c.source;
+    closeCrop();
+    if (!app.draft) app.draft = { ...(app.profile || { name: "", icon: "glass", color: "blue" }) };
+    app.draft.photo = dataUrl;
+    if (source === "settings") {
+      const typed = (document.getElementById("settingsName") || {}).value;
+      persistProfile({ ...app.draft, name: typed || app.draft.name });
+    }
+    render();
+  }
+  function stopCamera() {
+    const cam = app.ui.camera;
+    if (cam && cam.stream) cam.stream.getTracks().forEach((track) => track.stop());
+    app.ui.camera = null;
+  }
+  function startCamera(source) {
+    const devices = navigator.mediaDevices;
+    if (!devices || !devices.getUserMedia) { openCameraFile(source); return; }
+    const open = (stream) => { stopCamera(); app.ui.camera = { source, stream }; render(); };
+    devices.getUserMedia({ video: { facingMode: "user" }, audio: false })
+      .catch((err) => {
+        if (err && (err.name === "NotAllowedError" || err.name === "SecurityError")) throw err;
+        return devices.getUserMedia({ video: true, audio: false });
+      })
+      .then(open)
+      .catch((err) => {
+        const blocked = err && (err.name === "NotAllowedError" || err.name === "SecurityError");
+        if (blocked) { toast("Sta de camera toe in je browser."); return; }
+        openCameraFile(source);
+      });
+  }
+  function openCameraFile(source) {
+    const el = document.getElementById(source === "settings" ? "settingsCamera" : "styleCamera");
+    if (el) el.click();
+    else toast("Geen camera gevonden. Kies een foto uit je bestanden.");
+  }
+  function bindCamera() {
+    const video = document.getElementById("cameraVideo");
+    const cam = app.ui.camera;
+    if (!video || !cam || !cam.stream) return;
+    video.srcObject = cam.stream;
+    video.play().catch(() => {});
+  }
+  function snapCamera() {
+    const video = document.getElementById("cameraVideo");
+    const cam = app.ui.camera;
+    if (!video || !cam) return;
+    const w = video.videoWidth || 640;
+    const h = video.videoHeight || 480;
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    ctx.translate(w, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, w, h);
+    const source = cam.source;
+    canvas.toBlob((blob) => {
+      stopCamera();
+      if (!blob) { toast("Foto maken lukte niet."); render(); return; }
+      openCrop(new File([blob], "camera.jpg", { type: "image/jpeg" }), source);
+    }, "image/jpeg", 0.92);
+  }
+  function cameraHtml() {
+    if (!app.ui.camera) return "";
+    return `<div class="modal" data-act="camera-cancel"><div class="panel crop-panel" data-act="stop" role="dialog" aria-modal="true"><h3>Maak een foto</h3><p class="fine">Kijk in de camera en tik op de knop.</p><div class="camera-box"><video id="cameraVideo" autoplay playsinline muted></video></div><div class="stack"><button type="button" class="btn btn-primary" data-act="camera-snap">Neem foto</button><button type="button" class="btn btn-text" data-act="camera-cancel">Annuleren</button></div></div></div>`;
+  }
+  function cropHtml() {
+    const c = app.ui.crop;
+    if (!c) return "";
+    return `<div class="modal" data-act="crop-cancel"><div class="panel crop-panel" data-act="stop" role="dialog" aria-modal="true"><h3>Snijd je foto</h3><p class="fine">Sleep de foto en zoom. Het ronde stuk blijft zichtbaar.</p><div class="crop-box" id="cropBox"><img id="cropImg" src="${esc(c.url)}" alt="" draggable="false"></div><label class="crop-zoom">Zoom<input id="cropZoom" type="range" min="1" max="3" step="0.01" value="${c.zoom}"></label><div class="stack"><button type="button" class="btn btn-primary" data-act="crop-save">Dit stuk</button><button type="button" class="btn btn-text" data-act="crop-cancel">Annuleren</button></div></div></div>`;
+  }
   function shuffle(list) {
     const a = list.slice();
     for (let i = a.length - 1; i > 0; i--) {
@@ -315,7 +489,8 @@
     if (!p || typeof p !== "object") return null;
     const id = String(p.id || "").slice(0, 40);
     if (!/^[\w-]{4,40}$/.test(id)) return null;
-    return { id, name: cleanName(p.name, "Speler"), icon: validIcon(p.icon), color: validColor(p.color), sips: Math.max(0, Math.min(999, p.sips | 0)) };
+    const photo = /^\/media\/avatars\/ava-[a-z0-9-]+\.jpg$/i.test(String(p.photo || "")) ? String(p.photo) : "";
+    return { id, name: cleanName(p.name, "Speler"), icon: validIcon(p.icon), color: validColor(p.color), photo, sips: Math.max(0, Math.min(999, p.sips | 0)) };
   }
   function normalizeGame(g) {
     if (!g || !["rad", "vragen", "kaarten", "memes"].includes(g.id)) return null;
@@ -762,23 +937,39 @@
 
   function mePlayer() {
     const p = app.profile || { name: "Speler", icon: "glass", color: "blue" };
-    return { id: app.meId, name: p.name, icon: p.icon, color: p.color, sips: 0 };
+    return { id: app.meId, name: p.name, icon: p.icon, color: p.color, photo: cleanPhoto(p.photo), sips: 0 };
   }
-  function persistProfile(p) {
-    app.profile = { name: cleanName(p.name, "Speler"), icon: validIcon(p.icon), color: validColor(p.color) };
+  function saveProfileLocal() {
     localStorage.setItem("maatje.profile", JSON.stringify(app.profile));
     localStorage.setItem("maatje.welcomed", "1");
-    if (app.account && app.token) {
-      api("/api/me", { method: "PATCH", body: { name: app.profile.name, icon: app.profile.icon, color: app.profile.color, age: app.ui.age } })
-        .then((data) => { app.account = data.user; app.groups = data.groups || app.groups; })
-        .catch(() => {});
+  }
+  function persistProfile(p) {
+    const previous = cleanPhoto(app.profile && app.profile.photo);
+    const photo = p.photo === undefined ? previous : cleanPhoto(p.photo);
+    app.profile = { name: cleanName(p.name, "Speler"), icon: validIcon(p.icon), color: validColor(p.color), photo };
+    saveProfileLocal();
+    if (!(app.account && app.token)) return;
+    const patch = (userPhoto) => api("/api/me", { method: "PATCH", body: { name: app.profile.name, icon: app.profile.icon, color: app.profile.color, age: app.ui.age, photo: userPhoto || "" } })
+      .then((data) => { app.account = data.user; app.groups = data.groups || app.groups; if (data.user) { app.profile.photo = cleanPhoto(data.user.photo); saveProfileLocal(); } render(); })
+      .catch(() => {});
+    if (photo.startsWith("data:")) {
+      api("/api/me/photo", { method: "POST", body: { data: photo.split(",")[1] || "" } })
+        .then((data) => {
+          app.profile.photo = cleanPhoto(data.photo || (data.user && data.user.photo));
+          if (app.draft) app.draft.photo = app.profile.photo;
+          saveProfileLocal();
+          return patch(app.profile.photo);
+        })
+        .catch((err) => toast(err.message));
+      return;
     }
+    patch(photo.startsWith("/media/") ? photo : "");
   }
   function loadProfile() {
     try {
       const p = JSON.parse(localStorage.getItem("maatje.profile") || "null");
       if (!p) return null;
-      return { name: cleanName(p.name, "Speler"), icon: validIcon(p.icon), color: validColor(p.color) };
+      return { name: cleanName(p.name, "Speler"), icon: validIcon(p.icon), color: validColor(p.color), photo: cleanPhoto(p.photo) };
     } catch (e) { return null; }
   }
   function myId() {
@@ -979,6 +1170,7 @@
     });
   }
   function startJoinLoop() {
+    if (app.tv) return;
     clearInterval(app.joinTimer);
     let tries = 0;
     const pump = () => {
@@ -996,7 +1188,8 @@
     pump();
     app.joinTimer = setInterval(pump, 1600);
   }
-  async function createRoom() {
+  async function createRoom(opts) {
+    const asTv = !!(opts && opts.tv);
     if (needFriendsAccount()) return;
     const token = ++app.op;
     const seeded = app._groupPlayers;
@@ -1004,6 +1197,8 @@
     clearInterval(app.joinTimer);
     app.mode = "multi";
     app.isHost = true;
+    app.tv = asTv;
+    try { if (asTv) sessionStorage.setItem("maatje.tv", "1"); else sessionStorage.removeItem("maatje.tv"); } catch (e) {}
     app.state = null;
     app.roomCode = makeCode();
     app.error = "";
@@ -1023,7 +1218,8 @@
     sessionStorage.setItem("maatje.room", app.roomCode);
     setUrlRoom(app.roomCode);
     setTopics(app.roomCode);
-    app.state = { v: 1, gen: 1, rev: 1, hostId: app.meId, hostBeat: Date.now(), phase: "lobby", players: seeded && seeded.length ? seeded : [mePlayer()], game: null };
+    const players = asTv ? [] : (seeded && seeded.length ? seeded : [mePlayer()]);
+    app.state = { v: 1, gen: 1, rev: 1, hostId: app.meId, hostBeat: Date.now(), phase: "lobby", players, game: null };
     publishState();
     backup();
     if (app.account && app.groupId) linkGroupRoom(app.groupId, app.roomCode);
@@ -1042,6 +1238,10 @@
     clearInterval(app.joinTimer);
     app.mode = "multi";
     app.isHost = false;
+    try {
+      app.tv = sessionStorage.getItem("maatje.tv") === "1" && sessionStorage.getItem("maatje.room") === code;
+      if (!app.tv) sessionStorage.removeItem("maatje.tv");
+    } catch (e) { app.tv = false; }
     app.roomCode = code;
     app.state = null;
     app.error = "";
@@ -1085,7 +1285,7 @@
       app.state.hostBeat = Date.now();
       publishState();
     }
-    if (app.state.phase !== "closed") startJoinLoop();
+    if (app.state.phase !== "closed" && !app.tv) startJoinLoop();
     render();
   }
   function noteEveningMissed() {
@@ -1161,10 +1361,13 @@
     net.stateTopic = "";
     net.inTopic = "";
     sessionStorage.removeItem("maatje.room");
+    try { sessionStorage.removeItem("maatje.tv"); } catch (e) {}
     clearUrlRoom();
     app.mode = null;
     app.state = null;
     app.isHost = false;
+    app.tv = false;
+    app.ui.how = "";
     app.roomCode = "";
     app.conn = "off";
     app.error = "";
@@ -1358,7 +1561,7 @@
     if (data.token) localStorage.setItem("maatje.token", data.token);
     if (data.user) {
       app.account = data.user;
-      app.profile = { name: cleanName(data.user.name, "Speler"), icon: validIcon(data.user.icon), color: validColor(data.user.color) };
+      app.profile = { name: cleanName(data.user.name, "Speler"), icon: validIcon(data.user.icon), color: validColor(data.user.color), photo: cleanPhoto(data.user.photo) };
       localStorage.setItem("maatje.profile", JSON.stringify(app.profile));
       localStorage.setItem("maatje.welcomed", "1");
       if (AGES.some((a) => a.id === data.user.age)) app.ui.age = data.user.age;
@@ -1561,7 +1764,7 @@
     if (!app.account) {
       return `<section class="section-head"><p class="kicker">Groepen</p><h2>Speel vaker met dezelfde mensen.</h2><p class="lede">Maak een account, start een groep en bewaar jullie eigen vragen.</p><div class="stack" style="max-width:280px;margin-top:12px"><button type="button" class="btn btn-primary" data-act="login">Account maken</button></div></section>`;
     }
-    const cards = (app.groups || []).map((g) => `<button type="button" class="group-card gcard" data-act="open-group" data-id="${esc(g.id)}"><span class="kicker">${esc(g.code)}</span><h3>${esc(g.name)}</h3><div class="faces">${(g.members || []).slice(0, 8).map((m) => `<span class="ava" style="--c:${colorHex(m.color)}">${iconSvg(m.icon)}</span>`).join("")}</div><span class="fine">${(g.members || []).length} ${g.members.length === 1 ? "persoon" : "mensen"} · vragen ${esc((AGES.find((a) => a.id === g.age) || {}).label || "")}</span></button>`).join("");
+    const cards = (app.groups || []).map((g) => `<button type="button" class="group-card gcard" data-act="open-group" data-id="${esc(g.id)}"><span class="kicker">${esc(g.code)}</span><h3>${esc(g.name)}</h3><div class="faces">${(g.members || []).slice(0, 8).map((m) => `<span class="ava" style="--c:${colorHex(m.color)}">${faceHtml(m)}</span>`).join("")}</div><span class="fine">${(g.members || []).length} ${g.members.length === 1 ? "persoon" : "mensen"} · vragen ${esc((AGES.find((a) => a.id === g.age) || {}).label || "")}</span></button>`).join("");
     return `<section><div class="section-head"><p class="kicker">Jouw groepen</p><h2>${app.groups.length ? "Waar je vaker mee speelt." : "Nog geen groep."}</h2></div><div class="group-grid">${cards}<button type="button" class="group-card gcard" data-act="groups"><h3>Nieuwe groep</h3><p>Of doe mee met een groepscode.</p></button></div></section>`;
   }
   function loginHtml() {
@@ -1585,7 +1788,7 @@
     const members = g.members || [];
     const people = members.length === 1 ? "1 persoon" : members.length + " mensen";
     const age = (AGES.find((a) => a.id === g.age) || {}).label || "20–25";
-    const faces = members.slice(0, 8).map((m) => `<li><span class="ava" style="--c:${colorHex(m.color)}">${iconSvg(m.icon)}</span><b>${esc(m.name)}</b></li>`).join("");
+    const faces = members.slice(0, 8).map((m) => `<li><span class="ava" style="--c:${colorHex(m.color)}">${faceHtml(m)}</span><b>${esc(m.name)}</b></li>`).join("");
     const questions = (g.questions || []).length;
     const evenings = (g.evenings || []).length;
     const segments = (g.segments || []).length;
@@ -1622,7 +1825,7 @@
     const g = (app.groups || []).find((x) => x.id === app.groupId);
     if (!g) return `<div class="narrow">${topbar()}<p>Die groep is er niet.</p><button type="button" class="btn btn-primary" data-act="groups">Terug</button></div>`;
     const mine = app.account && g.ownerId === app.account.id;
-    return `<div class="wrap">${topbar()}<p class="kicker">Groep ${esc(g.code)}</p><h2>${esc(g.name)}</h2><p class="fine">${mine ? "Jij hebt deze groep gemaakt." : "Je zit in deze groep."} Deel de code ${esc(g.code)}.</p><div class="lobby-layout"><section class="lobby-card"><p class="kicker">Mensen</p><ul class="plist">${(g.members || []).map((m, i) => `<li class="prow"><span class="ord">${i + 1}</span><span class="ava" style="--c:${colorHex(m.color)}">${iconSvg(m.icon)}</span><span class="who"><b>${esc(m.name)}</b><small>${app.account && m.userId === app.account.id ? "jij" : ""}</small></span></li>`).join("")}</ul><div class="stack" style="margin-top:12px"><button type="button" class="btn btn-primary" data-act="group-local">Speel op één telefoon</button><button type="button" class="btn btn-ghost" data-act="group-room">Start een kamer</button></div></section><section class="lobby-card"><p class="kicker">Leeftijd voor vragen</p>${AGES.map((a) => `<button type="button" class="chip ${g.age === a.id ? "is-on" : ""}" data-act="group-age" data-age="${a.id}">${a.label}</button>`).join(" ")}<p class="fine">${esc((AGES.find((a) => a.id === g.age) || AGES[2]).hint)}</p><p class="kicker" style="margin-top:16px">Eigen vragen</p><ul class="plist">${(g.questions || []).map((q) => `<li class="prow"><span class="who"><b>${esc(q.text)}</b><small>${esc(q.by || "")}</small></span></li>`).join("") || `<li class="fine">Nog geen eigen vragen.</li>`}</ul><form data-act="add-question" class="auth-grid" style="margin-top:10px"><label class="field">Nieuwe vraag<input id="customQ" maxlength="180" placeholder="Wijs aan: wie regelt de bitterballen?" value="${esc(app.ui.customQ || "")}"></label><button class="btn btn-primary" type="submit">Bewaar vraag</button></form></section></div>${groupExtras(g)}<button type="button" class="btn btn-text" data-act="leave-group">Groep verlaten</button></div>`;
+    return `<div class="wrap">${topbar()}<p class="kicker">Groep ${esc(g.code)}</p><h2>${esc(g.name)}</h2><p class="fine">${mine ? "Jij hebt deze groep gemaakt." : "Je zit in deze groep."} Deel de code ${esc(g.code)}.</p><div class="lobby-layout"><section class="lobby-card"><p class="kicker">Mensen</p><ul class="plist">${(g.members || []).map((m, i) => `<li class="prow"><span class="ord">${i + 1}</span><span class="ava" style="--c:${colorHex(m.color)}">${faceHtml(m)}</span><span class="who"><b>${esc(m.name)}</b><small>${app.account && m.userId === app.account.id ? "jij" : ""}</small></span></li>`).join("")}</ul><div class="stack" style="margin-top:12px"><button type="button" class="btn btn-primary" data-act="group-local">Speel op één telefoon</button><button type="button" class="btn btn-ghost" data-act="group-room">Start een kamer</button></div></section><section class="lobby-card"><p class="kicker">Leeftijd voor vragen</p>${AGES.map((a) => `<button type="button" class="chip ${g.age === a.id ? "is-on" : ""}" data-act="group-age" data-age="${a.id}">${a.label}</button>`).join(" ")}<p class="fine">${esc((AGES.find((a) => a.id === g.age) || AGES[2]).hint)}</p><p class="kicker" style="margin-top:16px">Eigen vragen</p><ul class="plist">${(g.questions || []).map((q) => `<li class="prow"><span class="who"><b>${esc(q.text)}</b><small>${esc(q.by || "")}</small></span></li>`).join("") || `<li class="fine">Nog geen eigen vragen.</li>`}</ul><form data-act="add-question" class="auth-grid" style="margin-top:10px"><label class="field">Nieuwe vraag<input id="customQ" maxlength="180" placeholder="Wijs aan: wie regelt de bitterballen?" value="${esc(app.ui.customQ || "")}"></label><button class="btn btn-primary" type="submit">Bewaar vraag</button></form></section></div>${groupExtras(g)}<button type="button" class="btn btn-text" data-act="leave-group">Groep verlaten</button></div>`;
   }
   function applyTheme(theme) {
     const choice = ["system", "dark", "light"].includes(theme) ? theme : "dark";
@@ -1634,7 +1837,7 @@
   function drawSettings() {
     const d = app.draft || app.profile || { name: "", icon: "glass", color: "blue" };
     const theme = app.theme || "dark";
-    return `<div class="wrap">${topbar()}<div class="set-head"><button type="button" class="btn btn-text" data-act="settings-back">‹ Terug</button><div><p class="kicker">Instellingen</p><h2>Jouw voorkeuren</h2></div></div><div class="set-grid"><section class="set-card"><p class="label">Avatar</p><div class="you-pill" style="--c:${colorHex(d.color)}"><span class="mini-ico">${iconSvg(d.icon)}</span><strong id="settingsPreview">${esc(cleanName(d.name, "") || "Jouw naam")}</strong></div><p class="fine">Kies een pictogram en een kleur.</p><label class="field">Naam<input id="settingsName" maxlength="16" value="${esc(d.name || "")}" autocomplete="off" spellcheck="false"></label><p class="label">Pictogram</p><div class="icons">${ICONS.map((ic) => `<button type="button" class="ico ${d.icon === ic.id ? "is-on" : ""}" data-act="pick-icon" data-id="${ic.id}" aria-label="${ic.label}" aria-pressed="${d.icon === ic.id}">${ic.svg}</button>`).join("")}</div><p class="label">Kleur</p><div class="swatches">${COLORS.map((c) => `<button type="button" class="swatch ${d.color === c.id ? "is-on" : ""}" style="--c:${c.hex}" data-act="pick-color" data-id="${c.id}" aria-label="${c.label}" aria-pressed="${d.color === c.id}"></button>`).join("")}</div></section><section class="set-card"><p class="label">Thema</p><div class="seg">${[["system", "Systeem"], ["dark", "Donker"], ["light", "Licht"]].map(([id, label]) => `<button type="button" class="${theme === id ? "is-on" : ""}" data-act="theme" data-theme="${id}">${label}</button>`).join("")}</div><button type="button" class="set-row" data-act="sound"><span>Geluid</span><strong>${app.sound ? "Aan" : "Uit"}</strong></button><p class="label">Leeftijd voor vragen</p>${ageChips()}<p class="fine">${esc((AGES.find((a) => a.id === app.ui.age) || AGES[2]).hint)}</p><button type="button" class="set-row" data-act="admin" data-tab="vragen"><span>Vragen</span><strong>Beheren</strong></button><button type="button" class="set-row" data-act="admin" data-tab="memes"><span>Memes</span><strong>Beheren</strong></button><button type="button" class="set-row" data-act="${app.account ? "groups" : "login"}"><span>${app.account ? "Groepen" : "Account"}</span><strong>${app.account ? esc(app.account.name) : "Inloggen"}</strong></button>${app.account ? `<button type="button" class="set-row" data-act="logout"><span>Uitloggen</span><strong></strong></button>` : ""}</section></div></div>`;
+    return `<div class="wrap">${topbar()}<div class="set-head"><button type="button" class="btn btn-text" data-act="settings-back">‹ Terug</button><div><p class="kicker">Instellingen</p><h2>Jouw voorkeuren</h2></div></div><div class="set-grid"><section class="set-card"><p class="label">Avatar</p><div class="you-pill" style="--c:${colorHex(d.color)}"><span class="mini-ico">${faceHtml(d)}</span><strong id="settingsPreview">${esc(cleanName(d.name, "") || "Jouw naam")}</strong></div><p class="fine">Kies een foto, een pictogram en een kleur.</p>${photoPicker("settingsPhoto", d)}<label class="field">Naam<input id="settingsName" maxlength="16" value="${esc(d.name || "")}" autocomplete="off" spellcheck="false"></label><p class="label">Pictogram</p><div class="icons">${ICONS.map((ic) => `<button type="button" class="ico ${d.icon === ic.id ? "is-on" : ""}" data-act="pick-icon" data-id="${ic.id}" aria-label="${ic.label}" aria-pressed="${d.icon === ic.id}">${ic.svg}</button>`).join("")}</div><p class="label">Kleur</p><div class="swatches">${COLORS.map((c) => `<button type="button" class="swatch ${d.color === c.id ? "is-on" : ""}" style="--c:${c.hex}" data-act="pick-color" data-id="${c.id}" aria-label="${c.label}" aria-pressed="${d.color === c.id}"></button>`).join("")}</div></section><section class="set-card"><p class="label">Thema</p><div class="seg">${[["system", "Systeem"], ["dark", "Donker"], ["light", "Licht"]].map(([id, label]) => `<button type="button" class="${theme === id ? "is-on" : ""}" data-act="theme" data-theme="${id}">${label}</button>`).join("")}</div><button type="button" class="set-row" data-act="sound"><span>Geluid</span><strong>${app.sound ? "Aan" : "Uit"}</strong></button><p class="label">Leeftijd voor vragen</p>${ageChips()}<p class="fine">${esc((AGES.find((a) => a.id === app.ui.age) || AGES[2]).hint)}</p><button type="button" class="set-row" data-act="admin" data-tab="vragen"><span>Vragen</span><strong>Beheren</strong></button><button type="button" class="set-row" data-act="admin" data-tab="memes"><span>Memes</span><strong>Beheren</strong></button><button type="button" class="set-row" data-act="${app.account ? "groups" : "login"}"><span>${app.account ? "Groepen" : "Account"}</span><strong>${app.account ? esc(app.account.name) : "Inloggen"}</strong></button>${app.account ? `<button type="button" class="set-row" data-act="logout"><span>Uitloggen</span><strong></strong></button>` : ""}</section></div></div>`;
   }
   function ageChecks(selected) {
     const set = new Set(selected && selected.length ? selected : AGES.map((a) => a.id));
@@ -1733,7 +1936,7 @@
     const sessionBtn = app.account
       ? `<button type="button" class="bar-logout" data-act="logout">Uitloggen</button>`
       : `<button type="button" class="bar-logout" data-act="login">Inloggen</button>`;
-    return `<header class="bar"><div class="top"><div class="top-left"><button type="button" class="brand" data-act="brand">${logoSvg()}<b>Maatje</b></button></div>${topNav()}<div class="top-actions">${code}${sessionBtn}<button type="button" class="iconbtn" data-act="sound" aria-label="${app.sound ? "Geluid uit" : "Geluid aan"}">${soundSvg(app.sound)}</button><button type="button" class="iconbtn" data-act="settings" aria-label="Instellingen">${gearSvg()}</button><button type="button" class="you-mini" data-act="style" aria-label="Jouw stijl"><span class="mini-ico" style="color:${colorHex(me.color)}">${iconSvg(me.icon)}</span><strong>${esc(me.name)}</strong></button></div></div></header>`;
+    return `<header class="bar"><div class="top"><div class="top-left"><button type="button" class="brand" data-act="brand">${logoSvg()}<b>Maatje</b></button></div>${topNav()}<div class="top-actions">${code}${sessionBtn}<button type="button" class="iconbtn" data-act="sound" aria-label="${app.sound ? "Geluid uit" : "Geluid aan"}">${soundSvg(app.sound)}</button><button type="button" class="iconbtn" data-act="settings" aria-label="Instellingen">${gearSvg()}</button><button type="button" class="you-mini" data-act="style" aria-label="Jouw stijl"><span class="mini-ico" style="color:${colorHex(me.color)}">${faceHtml(me)}</span><strong>${esc(me.name)}</strong></button></div></div></header>`;
   }
   function codeTiles(code) {
     const chars = String(code || "").slice(0, 4).split("");
@@ -1785,23 +1988,64 @@
     const names = leaders.map((p) => esc(p.name));
     const who = names.length < 2 ? (names[0] || "") : names.slice(0, -1).join(", ") + " en " + names[names.length - 1];
     const lead = topSip ? who + (leaders.length === 1 ? " had de meeste slokken." : " hadden de meeste slokken.") : "Niemand heeft gedronken.";
-    const board = r.players.map((p) => `<li class="prow"><span class="ava" style="--c:${colorHex(p.color)}">${iconSvg(p.icon)}</span><span class="who"><b>${esc(p.name)}</b><small>${topSip && p.sips === topSip ? "meeste · " : ""}${sipWord(p.sips)}</small></span></li>`).join("");
+    const board = r.players.map((p) => `<li class="prow"><span class="ava" style="--c:${colorHex(p.color)}">${faceHtml(p)}</span><span class="who"><b>${esc(p.name)}</b><small>${topSip && p.sips === topSip ? "meeste · " : ""}${sipWord(p.sips)}</small></span></li>`).join("");
     const answers = (r.answers || []).length ? `<p class="kicker" style="margin-top:22px">Antwoorden</p><ul class="plist">${r.answers.map((n) => `<li class="prow"><span class="who"><b>${esc(n)}</b></span></li>`).join("")}</ul>` : "";
     const missed = (r.missed || []).length ? `<p class="kicker" style="margin-top:22px">Niet geweten</p><ul class="plist">${r.missed.map((n) => `<li class="prow"><span class="who"><b>${esc(n)}</b></span></li>`).join("")}</ul>` : "";
     return `<div class="narrow">${topbar()}<p class="kicker">Einde van de avond</p><h2>${lead}</h2><ul class="plist">${board}</ul>${answers}${missed}<div class="stack" style="margin-top:16px"><button type="button" class="btn btn-primary" data-act="recap-done">Klaar</button></div></div>`;
   }
+  function howOneArt() {
+    return `<svg viewBox="0 0 160 96" aria-hidden="true">
+      <circle cx="80" cy="48" r="36" fill="none" stroke="currentColor" stroke-opacity=".28" stroke-dasharray="2 4"/>
+      <g fill="none" stroke-width="1.6" stroke-linecap="round">
+        <g stroke="currentColor"><circle cx="34" cy="24" r="6"/><path d="M31.4 24.6c.7.8 1.5 1.1 2.6 1.1s1.9-.3 2.6-1.1"/><path d="M26 38c2.2-6 13.6-6 16 0"/></g>
+        <g stroke="#8eb6ff"><circle cx="126" cy="26" r="6"/><path d="M123.4 26.6c.7.8 1.5 1.1 2.6 1.1s1.9-.3 2.6-1.1"/><path d="M118 40c2.2-6 13.6-6 16 0"/></g>
+        <g stroke="#3dd68c"><circle cx="42" cy="74" r="6"/><path d="M39.4 74.6c.7.8 1.5 1.1 2.6 1.1s1.9-.3 2.6-1.1"/><path d="M34 88c2.2-6 13.6-6 16 0"/></g>
+        <g stroke="currentColor"><circle cx="120" cy="74" r="6"/><path d="M117.4 74.6c.7.8 1.5 1.1 2.6 1.1s1.9-.3 2.6-1.1"/><path d="M112 88c2.2-6 13.6-6 16 0"/></g>
+      </g>
+      <rect x="68" y="26" width="24" height="42" rx="4" fill="none" stroke="currentColor" stroke-width="1.6"/>
+      <rect x="73" y="34" width="7" height="10" rx="1" transform="rotate(-10 76 39)" fill="none" stroke="currentColor"/>
+      <rect x="80" y="34" width="7" height="10" rx="1" transform="rotate(8 83 39)" fill="none" stroke="currentColor"/>
+    </svg>`;
+  }
+  function howPhonesArt() {
+    return `<svg viewBox="0 0 160 96" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+      <path d="M48 30c10-14 22-16 32-8" stroke-dasharray="2 3" stroke-opacity=".7"/>
+      <path d="M112 30c-10-14-22-16-32-8" stroke-dasharray="2 3" stroke-opacity=".7"/>
+      <rect x="22" y="34" width="26" height="44" rx="4"/>
+      <rect x="67" y="22" width="26" height="44" rx="4"/>
+      <rect x="112" y="34" width="26" height="44" rx="4"/>
+    </svg>`;
+  }
+  function howTvArt() {
+    return `<svg viewBox="0 0 36 28" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="2" y="3" width="32" height="18" rx="2"/><path d="M12 25h12" stroke-linecap="round"/></svg>`;
+  }
+  function photoPicker(id, person) {
+    const has = !!cleanPhoto(person && person.photo);
+    const source = id === "settingsPhoto" ? "settings" : "style";
+    const camId = source === "settings" ? "settingsCamera" : "styleCamera";
+    return `<label class="field">Eigen foto<span class="file-row"><input id="${id}" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"><span class="file-btn">Kies een foto</span><span>${has ? "Foto gekozen" : "Geen foto"}</span></span></label><button type="button" class="btn btn-ghost photo-cam" data-act="take-photo" data-source="${source}">Maak een foto</button><input id="${camId}" class="sr-file" type="file" accept="image/*" capture="user">${has ? `<button type="button" class="btn btn-text" data-act="clear-photo">Foto weghalen</button>` : ""}<p class="fine">Op je telefoon opent de camera. Op een laptop de webcam, als die er is. Daarna kies je welk stuk blijft.</p>`;
+  }
+  function howHead() {
+    return `<div class="how-mark">${logoSvg()}</div><h1 class="how-title">Maatje</h1>`;
+  }
   function drawHome() {
     const p = app.profile || { name: "Jij", icon: "glass", color: "blue" };
-    return `<div class="wrap">${topbar()}<section class="hero"><div class="hero-copy"><p class="kicker">Drankspelletjes</p><h1>Zet ’m op tafel.</h1><p class="lede">Vier spelletjes die je in een minuut snapt. Eén telefoon doorgeven, of allemaal meedoen met een code.</p><div class="mascot" aria-hidden="true"><div class="m-wheel"></div><div class="m-card"><span>A</span><b>♥</b></div><div class="m-q">?</div></div></div><section class="join"><h2>Aan tafel</h2><p class="muted">Kies hoe jullie spelen.</p><button type="button" class="you-row" data-act="style"><span class="mini-ico" style="color:${colorHex(p.color)}">${iconSvg(p.icon)}</span><span><small>Jij speelt als</small><strong>${esc(p.name)}</strong></span><em>Wijzig</em></button><button type="button" class="btn btn-primary" data-act="local">Eén telefoon</button><p class="or">of samen</p><form data-act="join" class="join-row"><label class="code-field"><span class="sr">Spelcode</span><input id="codeInput" maxlength="8" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Spelcode" value="${esc(app.ui.codeValue || "")}"><span class="slots" id="codeSlots" aria-hidden="true"><i></i><i></i><i></i><i></i></span></label><button class="btn btn-blue" type="submit">Meedoen</button></form><div class="stack" style="margin-top:10px"><button type="button" class="btn btn-ghost" data-act="create">Nieuw spel starten</button></div><p class="fine">Meerdere telefoons hebben internet nodig. Je hoeft niks te kopen. De telefoon die het spel start, blijft aan.</p>${netNote()}</section></section><section class="home-games"><div class="section-head"><p class="kicker">Vier spellen</p><h2>Kies er een.</h2></div><div class="gcards">${gameCards(false)}</div></section>${homeRules()}${homeGroups()}<p class="foot">Alcohol is voor 18+. Drink met mate. Kijken en één telefoon spelen mag zonder account. Met een code heb je een bevestigd e-mailadres nodig. Het account staat lokaal in een JSON-bestand. Deel een spelcode alleen met je tafel.</p></div>`;
+    const you = `<button type="button" class="you-row how-you" data-act="style"><span class="mini-ico" style="color:${colorHex(p.color)}">${faceHtml(p)}</span><span><small>Jij speelt als</small><strong>${esc(p.name)}</strong></span><em>Wijzig</em></button>`;
+    const choices = `<div class="how-grid"><button type="button" class="mode-card" data-act="local"><span class="how-ico">${howOneArt()}</span><strong>Eén telefoon</strong><small>Samen op één scherm</small></button><button type="button" class="mode-card" data-act="how-phones"><span class="how-ico">${howPhonesArt()}</span><strong>Iedere telefoon</strong><small>Iedereen op z’n eigen</small></button></div><button type="button" class="how-tv" data-act="tv"><span class="how-tv-ico">${howTvArt()}</span><span class="how-tv-copy"><strong>Dit is de televisie</strong><small>Het grote scherm blijft aan</small></span><em aria-hidden="true">›</em></button>`;
+    const joinName = app.ui.joinName != null ? app.ui.joinName : (p.name && p.name !== "Speler" && p.name !== "Jij" ? p.name : "");
+    const phones = `<form data-act="join" class="join-card"><h2>Aan tafel</h2><label>Jouw naam<input id="joinName" maxlength="16" autocomplete="nickname" placeholder="Bijvoorbeeld Sam" value="${esc(joinName)}"></label><label>Spelcode<input id="codeInput" class="is-code" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Vier tekens" value="${esc(app.ui.codeValue || "")}"></label><button class="join-go" type="submit">Meedoen</button></form><p class="how-or"><span>of</span></p><button type="button" class="how-start" data-act="create">Start een nieuw spel</button><button type="button" class="btn btn-text" data-act="how-back">Terug</button>`;
+    const ask = app.ui.how === "phones" ? `<p class="how-lead">Het rad, vragen, kaarten en memes.<br>Iedereen op een eigen telefoon.</p>` : `<p class="how-q">Hoe spelen jullie?</p>`;
+    const below = app.ui.how === "phones" ? "" : `<section class="home-games"><div class="section-head"><p class="kicker">Vier spellen</p><h2>Kies er een.</h2></div><div class="gcards">${gameCards(false)}</div></section>${homeRules()}${homeGroups()}<p class="foot">Alcohol is voor 18+. Drink met mate. Kijken en één telefoon spelen mag zonder account. Met een code heb je een bevestigd e-mailadres nodig. Het account staat lokaal in een JSON-bestand. Deel een spelcode alleen met je tafel.</p>`;
+    return `<div class="wrap">${topbar()}<section class="how">${howHead()}${ask}${app.ui.how === "phones" ? phones : choices}${app.ui.how === "phones" ? "" : you}</section>${below}</div>`;
   }
   function drawStyle() {
     const d = app.draft || { name: "", icon: "glass", color: "blue" };
     const hex = colorHex(d.color);
     const shown = cleanName(d.name, "") || "Jouw naam";
-    return `<div class="narrow style-screen">${topbar()}<div class="style-head"><div class="palette" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="8" r="2.2"/><circle cx="16" cy="9" r="2.2"/><circle cx="9" cy="16" r="2.2"/><circle cx="16" cy="16" r="2.2"/></svg></div><h1>Maak het jouw stijl</h1><div class="preview-wrap"><div class="you-pill" style="--c:${hex}"><span class="mini-ico">${iconSvg(d.icon)}</span><strong id="previewName">${esc(shown)}</strong></div><p class="muted">Zo zie je eruit aan tafel</p></div></div><form data-act="save-style"><label class="field">Jouw naam<input id="styleName" maxlength="16" placeholder="bijv. Alex" autocomplete="off" spellcheck="false" value="${esc(d.name || "")}"></label><p class="label">Pictogram</p><div class="icons">${ICONS.map((ic) => `<button type="button" class="ico ${d.icon === ic.id ? "is-on" : ""}" data-act="pick-icon" data-id="${ic.id}" aria-label="${ic.label}" aria-pressed="${d.icon === ic.id}">${ic.svg}</button>`).join("")}</div><p class="label">Kleur</p><div class="swatches">${COLORS.map((c) => `<button type="button" class="swatch ${d.color === c.id ? "is-on" : ""}" style="--c:${c.hex}" data-act="pick-color" data-id="${c.id}" aria-label="${c.label}" aria-pressed="${d.color === c.id}"></button>`).join("")}</div><div class="stack" style="margin-top:18px"><button class="btn btn-primary" type="submit">Ga verder</button></div></form><div class="split-links"><button type="button" data-act="back-style">‹ Terug</button><button type="button" data-act="skip-style">Overslaan</button></div></div>`;
+    return `<div class="narrow style-screen">${topbar()}<div class="style-head"><div class="palette" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="8" r="2.2"/><circle cx="16" cy="9" r="2.2"/><circle cx="9" cy="16" r="2.2"/><circle cx="16" cy="16" r="2.2"/></svg></div><h1>Maak het jouw stijl</h1><div class="preview-wrap"><div class="you-pill" style="--c:${hex}"><span class="mini-ico">${faceHtml(d)}</span><strong id="previewName">${esc(shown)}</strong></div><p class="muted">Zo zie je eruit aan tafel</p></div></div><form data-act="save-style"><label class="field">Jouw naam<input id="styleName" maxlength="16" placeholder="bijv. Alex" autocomplete="off" spellcheck="false" value="${esc(d.name || "")}"></label>${photoPicker("stylePhoto", d)}<p class="label">Pictogram</p><div class="icons">${ICONS.map((ic) => `<button type="button" class="ico ${d.icon === ic.id ? "is-on" : ""}" data-act="pick-icon" data-id="${ic.id}" aria-label="${ic.label}" aria-pressed="${d.icon === ic.id}">${ic.svg}</button>`).join("")}</div><p class="label">Kleur</p><div class="swatches">${COLORS.map((c) => `<button type="button" class="swatch ${d.color === c.id ? "is-on" : ""}" style="--c:${c.hex}" data-act="pick-color" data-id="${c.id}" aria-label="${c.label}" aria-pressed="${d.color === c.id}"></button>`).join("")}</div><div class="stack" style="margin-top:18px"><button class="btn btn-primary" type="submit">Ga verder</button></div></form><div class="split-links"><button type="button" data-act="back-style">‹ Terug</button><button type="button" data-act="skip-style">Overslaan</button></div></div>`;
   }
   function drawLocalPlayers() {
-    const rows = app.draftPlayers.map((p, i) => `<li class="prow"><span class="ord">${i + 1}</span><button type="button" class="ava" style="--c:${colorHex(p.color)}" data-act="shuffle-look" data-id="${p.id}" aria-label="Andere look voor ${esc(p.name)}">${iconSvg(p.icon)}</button><input id="nm-${p.id}" data-bind="player" data-id="${p.id}" maxlength="16" value="${esc(p.name)}" aria-label="Naam" spellcheck="false"><span class="row-actions"><button type="button" data-act="move" data-id="${p.id}" data-dir="-1" aria-label="Omhoog">↑</button><button type="button" data-act="move" data-id="${p.id}" data-dir="1" aria-label="Omlaag">↓</button><button type="button" data-act="remove-draft" data-id="${p.id}" aria-label="Weghalen">×</button></span></li>`).join("");
+    const rows = app.draftPlayers.map((p, i) => `<li class="prow"><span class="ord">${i + 1}</span><button type="button" class="ava" style="--c:${colorHex(p.color)}" data-act="shuffle-look" data-id="${p.id}" aria-label="Andere look voor ${esc(p.name)}">${faceHtml(p)}</button><input id="nm-${p.id}" data-bind="player" data-id="${p.id}" maxlength="16" value="${esc(p.name)}" aria-label="Naam" spellcheck="false"><span class="row-actions"><button type="button" data-act="move" data-id="${p.id}" data-dir="-1" aria-label="Omhoog">↑</button><button type="button" data-act="move" data-id="${p.id}" data-dir="1" aria-label="Omlaag">↓</button><button type="button" data-act="remove-draft" data-id="${p.id}" aria-label="Weghalen">×</button></span></li>`).join("");
     return `<div class="narrow">${topbar()}<p class="kicker">Eén telefoon</p><h2>Wie spelen er?</h2><p class="hint">Zet ze in de zitvolgorde, met de klok mee. Dat is links en rechts in Het Rad. Tik een pictogram voor een andere look.</p><ul class="plist">${rows}</ul><form data-act="add-player" class="add-row" style="margin-top:10px"><input id="addPlayer" maxlength="16" placeholder="Naam van je maat" value="${esc(app.ui.addName || "")}" aria-label="Nieuwe speler"><button class="btn btn-blue" type="submit">Toevoegen</button></form><div class="stack" style="margin-top:16px"><button type="button" class="btn btn-primary" data-act="save-players">Klaar</button><button type="button" class="btn btn-text" data-act="back-players">Terug</button></div></div>`;
   }
   function confirmBox() {
@@ -1823,17 +2067,20 @@
     return app.state.players.map((p, i) => {
       const badges = [p.id === app.meId ? "jij" : "", p.id === app.state.hostId && app.mode === "multi" ? "start" : ""].filter(Boolean).join(" · ");
       const controls = editable ? `<span class="row-actions"><button type="button" data-act="move" data-id="${p.id}" data-dir="-1" aria-label="Omhoog">↑</button><button type="button" data-act="move" data-id="${p.id}" data-dir="1" aria-label="Omlaag">↓</button>${p.id !== app.state.hostId ? `<button type="button" data-act="kick" data-id="${p.id}" aria-label="Weghalen">×</button>` : ""}</span>` : "";
-      return `<li class="prow"><span class="ord">${i + 1}</span><span class="ava" style="--c:${colorHex(p.color)}">${iconSvg(p.icon)}</span><span class="who"><b>${esc(p.name)}</b><small>${esc(badges || sipWord(p.sips))}</small></span>${controls}</li>`;
+      return `<li class="prow"><span class="ord">${i + 1}</span><span class="ava" style="--c:${colorHex(p.color)}">${faceHtml(p)}</span><span class="who"><b>${esc(p.name)}</b><small>${esc(badges || sipWord(p.sips))}</small></span>${controls}</li>`;
     }).join("");
   }
   function drawLobby() {
     const host = app.mode !== "multi" || app.isHost;
-    const codeBlock = app.mode === "multi"
-      ? `<p class="kicker">Kamer</p><h2>De code</h2>${codeTiles(app.roomCode)}${qrBlock()}<div class="share-row"><button type="button" class="btn btn-primary" data-act="share">Deel de code</button><button type="button" class="btn btn-ghost" data-act="copy-code">Kopieer</button></div><p class="fine">Laat dit scherm aan op de telefoon die startte. Gaat die op slot, dan kan iemand anders de leiding nemen.</p>`
-      : `<p class="kicker">Eén telefoon</p><h2>Kies een spel</h2><p class="hint">Geef de telefoon door aan wie aan de beurt is.</p>`;
+    const codeBlock = app.mode !== "multi"
+      ? `<p class="kicker">Eén telefoon</p><h2>Kies een spel</h2><p class="hint">Geef de telefoon door aan wie aan de beurt is.</p>`
+      : app.tv
+        ? `<p class="kicker">Televisie</p><h2>De code</h2>${codeTiles(app.roomCode)}${qrBlock()}<p class="lede">Laat dit scherm aan. Iedereen vult de code in op een eigen telefoon.</p><div class="share-row"><button type="button" class="btn btn-primary" data-act="share">Deel de code</button><button type="button" class="btn btn-ghost" data-act="copy-code">Kopieer</button></div>`
+        : `<p class="kicker">Kamer</p><h2>De code</h2>${codeTiles(app.roomCode)}${qrBlock()}<div class="share-row"><button type="button" class="btn btn-primary" data-act="share">Deel de code</button><button type="button" class="btn btn-ghost" data-act="copy-code">Kopieer</button></div><p class="fine">Laat dit scherm aan op de telefoon die startte. Gaat die op slot, dan kan iemand anders de leiding nemen.</p>`;
+    const waiting = app.tv && !app.state.players.length ? "Nog niemand. Vul de code in op een telefoon." : (app.state.players.length < 2 ? "Met z’n tweeën is het leuker. Je kunt ook al starten." : "Hou het gezellig. Eén slok is genoeg.");
     const sips = app.state.players.some((p) => p.sips > 0) && host ? `<button type="button" class="btn btn-text" data-act="reset-sips">Teller op nul</button>` : "";
     const edit = app.mode === "local" ? `<button type="button" class="btn btn-text" data-act="edit-players">Wijzig spelers</button>` : "";
-    return `<div class="wrap">${topbar()}${banners()}<div class="lobby-layout"><section class="lobby-card">${codeBlock}</section><section class="lobby-card"><p class="kicker">Spelers</p><ul class="plist">${playerRows(host)}</ul><div class="dock-links">${edit}${sips}</div><p class="fine">${app.state.players.length < 2 ? "Met z’n tweeën is het leuker. Je kunt ook al starten." : "Hou het gezellig. Eén slok is genoeg."}</p></section></div><div class="gcards lobby-games">${gameCards(host)}</div></div>`;
+    return `<div class="wrap">${topbar()}${banners()}<div class="lobby-layout"><section class="lobby-card">${codeBlock}</section><section class="lobby-card"><p class="kicker">Spelers</p><ul class="plist">${playerRows(host)}</ul><div class="dock-links">${edit}${sips}</div><p class="fine">${waiting}</p></section></div><div class="gcards lobby-games">${gameCards(host)}</div></div>`;
   }
   function drawConnecting() {
     return `<div class="narrow center-page">${topbar()}<p class="kicker">${app.isHost ? "Nieuwe kamer" : "Meedoen"}</p>${codeTiles(app.roomCode)}<p class="lede">${esc(app.error || "Even verbinden…")}</p><div class="stack">${app.error ? '<button type="button" class="btn btn-primary" data-act="retry">Opnieuw proberen</button>' : '<div class="spinner" aria-hidden="true"></div>'}<button type="button" class="btn btn-ghost" data-act="go-home">Annuleren</button>${app.error ? '<button type="button" class="btn btn-ghost" data-act="local">Speel op één telefoon</button>' : ""}</div></div>`;
@@ -1843,7 +2090,7 @@
   }
   function playerStrip() {
     const turn = app.state.game ? app.state.game.turn : -1;
-    return `<div class="strip">${app.state.players.map((p, i) => `<div class="pchip ${i === turn ? "is-turn" : ""} ${p.id === app.meId ? "is-me" : ""}"><div class="ava" style="--c:${colorHex(p.color)}">${iconSvg(p.icon)}</div><b>${esc(p.name)}</b><small>${sipWord(p.sips)}</small></div>`).join("")}</div>`;
+    return `<div class="strip">${app.state.players.map((p, i) => `<div class="pchip ${i === turn ? "is-turn" : ""} ${p.id === app.meId ? "is-me" : ""}"><div class="ava" style="--c:${colorHex(p.color)}">${faceHtml(p)}</div><b>${esc(p.name)}</b><small>${sipWord(p.sips)}</small></div>`).join("")}</div>`;
   }
   function resultInfo() {
     const g = app.state.game;
@@ -1892,10 +2139,11 @@
     const bg = `conic-gradient(from 0deg, ${parts.map((s, i) => `${s.bg} ${i * a}deg ${(i + 1) * a}deg`).join(",")})`;
     const labels = parts.map((s, i) => {
       const mid = (i + 0.5) * a;
-      return `<div class="lab" style="transform:rotate(${mid}deg)"><div class="lab-in" style="color:${s.fg}"><span class="emo">${s.emoji}</span><span class="w">${esc(s.label)}</span></div></div>`;
+      const flip = mid > 90 && mid < 270 ? " flip" : "";
+      return `<div class="lab" style="transform:rotate(${mid}deg)"><div class="lab-in${flip}" style="color:${s.fg}"><span class="emo">${s.emoji}</span><span class="w">${esc(s.label)}</span></div></div>`;
     }).join("");
     const spokes = parts.map((_, i) => `<i class="spoke" style="transform:rotate(${i * a}deg)"></i>`).join("");
-    return `<div class="wheel-wrap"><div class="pointer"></div><div id="wheelSpin" class="wheel-spin"><div class="wheel-face" style="background:${bg}"></div>${spokes}${labels}</div><div class="hub">${iconSvg("glass")}</div></div>`;
+    return `<div class="wheel-wrap"><div class="pointer"></div><div class="wheel-rim"></div><div id="wheelSpin" class="wheel-spin"><div class="wheel-face" style="background:${bg}"></div>${spokes}${labels}</div><div class="wheel-gloss"></div><div class="hub">${iconSvg("glass")}</div></div>`;
   }
   function drawRad() {
     const g = app.state.game;
@@ -2028,7 +2276,7 @@
     }
   }
   function draw() {
-    try { return drawView() + modalHtml() + loginHtml(); }
+    try { return drawView() + modalHtml() + loginHtml() + cameraHtml() + cropHtml(); }
     catch (err) {
       console.error(err);
       return '<div class="narrow"><p>Er ging iets mis.</p><button type="button" class="btn btn-primary" data-act="go-home">Naar het begin</button></div>';
@@ -2038,7 +2286,7 @@
     const s = app.state;
     const g = s && s.game;
     const gameFp = g ? [g.id, g.stage, g.turn, g.spin && g.spin.id, g.targetId, g.choice, g.cursor, g.index, g.outcome, g.note, g.banner, g.category, g.round].join(".") : "";
-    return [view(), app.conn, app.error || "", app.sound ? 1 : 0, app.admin ? 1 : 0, app.questionsRev, app.memesRev, app.ui.adminTab || "", app.ui.editId || "", app.ui.noRoom ? 1 : 0, app.ui.stale ? 1 : 0, app.ui.confirmLeave ? 1 : 0, app.ui.rules || "", app.ui.filter || "", app.ui.age || "", app.ui.joinWait || "", app.overlay || "", app.ui.authMode || "", app.ui.previewLink || "", app.screen || "", app.theme || "", app.groupId || "", app.account ? app.account.id + (app.account.verified === false ? "u" : "v") : "", (app.groups || []).map((g) => g.id + g.activeRoom + (g.questions || []).length + ":" + (g.segments || []).length + ":" + (g.evenings || []).length).join(","), app.roomCode || "", resultVisible() ? 1 : 0, app.profile ? app.profile.name + app.profile.icon + app.profile.color : "", app.draft ? app.draft.icon + app.draft.color : "", (app.draftPlayers || []).map((p) => p.id + p.icon + p.color).join(","), s ? s.rev + ":" + s.gen + ":" + s.phase + ":" + s.hostId + ":" + s.players.map((p) => p.id + p.name + p.sips + p.icon + p.color).join("/") + ":" + gameFp : ""].join("~");
+    return [view(), app.ui.crop ? 1 : 0, app.ui.camera ? 1 : 0, app.tv ? 1 : 0, app.ui.how || "", app.conn, app.error || "", app.sound ? 1 : 0, app.admin ? 1 : 0, app.questionsRev, app.memesRev, app.ui.adminTab || "", app.ui.editId || "", app.ui.noRoom ? 1 : 0, app.ui.stale ? 1 : 0, app.ui.confirmLeave ? 1 : 0, app.ui.rules || "", app.ui.filter || "", app.ui.age || "", app.ui.joinWait || "", app.overlay || "", app.ui.authMode || "", app.ui.previewLink || "", app.screen || "", app.theme || "", app.groupId || "", app.account ? app.account.id + (app.account.verified === false ? "u" : "v") : "", (app.groups || []).map((g) => g.id + g.activeRoom + (g.questions || []).length + ":" + (g.segments || []).length + ":" + (g.evenings || []).length).join(","), app.roomCode || "", resultVisible() ? 1 : 0, app.profile ? app.profile.name + app.profile.icon + app.profile.color + (app.profile.photo ? app.profile.photo.length + app.profile.photo.slice(-8) : "") : "", app.draft ? app.draft.icon + app.draft.color + (app.draft.photo ? app.draft.photo.length : "") : "", (app.draftPlayers || []).map((p) => p.id + p.icon + p.color).join(","), s ? s.rev + ":" + s.gen + ":" + s.phase + ":" + s.hostId + ":" + s.players.map((p) => p.id + p.name + p.sips + p.icon + p.color).join("/") + ":" + gameFp : ""].join("~");
   }
   function captureForm() {
     const a = document.activeElement;
@@ -2084,6 +2332,8 @@
     app.root.innerHTML = draw();
     restoreForm(focus);
     paintSlots();
+    bindCamera();
+    bindCrop();
     renderGoogle();
     const animate = !!app.ui.justStartedSpin;
     app.ui.justStartedSpin = false;
@@ -2132,6 +2382,7 @@ function saveStyleFromDraft(skip) {
       name: cleanName(name, "Speler"),
       icon: skip ? pick(ICONS).id : validIcon(app.draft.icon),
       color: skip ? pick(COLORS).id : validColor(app.draft.color),
+      photo: (app.draft && app.draft.photo) || "",
     });
     const next = app.afterStyle;
     app.afterStyle = null;
@@ -2149,14 +2400,14 @@ function saveStyleFromDraft(skip) {
       render();
       return;
     }
-    persistProfile({ name: cleanName(app.draft && app.draft.name, "Speler"), icon: validIcon(app.draft && app.draft.icon), color: validColor(app.draft && app.draft.color) });
+    persistProfile({ name: cleanName(app.draft && app.draft.name, "Speler"), icon: validIcon(app.draft && app.draft.icon), color: validColor(app.draft && app.draft.color), photo: (app.draft && app.draft.photo) || "" });
     clearUrlRoom();
     sessionStorage.removeItem("maatje.room");
     app.screen = "home";
     render();
   }
   function openStyle() {
-    app.draft = { name: app.profile ? app.profile.name : "", icon: app.profile ? app.profile.icon : "glass", color: app.profile ? app.profile.color : "orange" };
+    app.draft = { name: app.profile ? app.profile.name : "", icon: app.profile ? app.profile.icon : "glass", color: app.profile ? app.profile.color : "orange", photo: app.profile ? app.profile.photo : "" };
     app.overlay = "style";
     render();
   }
@@ -2212,7 +2463,7 @@ function addDraft(name) {
     render();
   }
   function beginGame(id) {
-    if (!app.state || !app.state.players.length) return;
+    if (!app.state || !app.state.players.length) { toast(app.tv ? "Wacht tot er iemand meedoet." : "Er is nog niemand."); return; }
     if (app.mode === "multi" && !app.isHost) return;
     if (!GAMES.some((g) => g.id === id)) return;
     if (id === "memes" && !MEMES.length) { toast("Zet eerst een meme in het beheer."); return; }
@@ -2272,9 +2523,21 @@ function addDraft(name) {
       render();
       return;
     }
+    if (act === "take-photo") { startCamera(t.dataset.source === "settings" ? "settings" : "style"); return; }
+    if (act === "camera-snap") { snapCamera(); return; }
+    if (act === "camera-cancel") { stopCamera(); render(); return; }
+    if (act === "crop-save") { applyCrop(); return; }
+    if (act === "crop-cancel") { closeCrop(); render(); return; }
+    if (act === "clear-photo") {
+      if (!app.draft) app.draft = { ...(app.profile || { name: "", icon: "glass", color: "blue" }) };
+      app.draft.photo = "";
+      if (app.screen === "settings") persistProfile(app.draft);
+      render();
+      return;
+    }
     if (act === "pick-icon" || act === "pick-color") {
       if (!app.draft) app.draft = { ...(app.profile || { name: "", icon: "glass", color: "blue" }) };
-      if (act === "pick-icon") app.draft.icon = validIcon(t.dataset.id);
+      if (act === "pick-icon") { app.draft.icon = validIcon(t.dataset.id); app.draft.photo = ""; }
       else app.draft.color = validColor(t.dataset.id);
       if (app.screen === "settings") persistProfile(app.draft);
       render();
@@ -2324,6 +2587,9 @@ function addDraft(name) {
     if (act === "back-style") return backFromStyle();
     if (act === "skip-style") return saveStyleFromDraft(true);
     if (act === "local") return openLocal();
+    if (act === "how-phones") { app.ui.how = "phones"; render(); return; }
+    if (act === "how-back") { app.ui.how = ""; render(); return; }
+    if (act === "tv") return createRoom({ tv: true });
     if (act === "create") return createRoom();
     if (act === "save-players") return saveLocalPlayers();
     if (act === "back-players") {
@@ -2469,12 +2735,13 @@ function addDraft(name) {
   }
   function onInput(e) {
     const t = e.target;
+    if (t.id === "joinName") { app.ui.joinName = t.value; return; }
     if (t.id === "codeInput") {
       const norm = normalizeCode(t.value);
       if (t.value !== norm.code) t.value = norm.code;
       app.ui.codeValue = norm.code;
       paintSlots();
-      if (norm.code.length === 4) joinRoom(norm.code);
+      if (norm.code.length === 4 && !document.getElementById("joinName")) joinRoom(norm.code);
       return;
     }
     if (t.id === "settingsName") {
@@ -2509,7 +2776,17 @@ function addDraft(name) {
     if (!form || !app.root.contains(form)) return;
     e.preventDefault();
     if (form.dataset.act === "save-style") saveStyleFromDraft(false);
-    if (form.dataset.act === "join") joinRoom(readCodeInput());
+    if (form.dataset.act === "join") {
+      const nameEl = document.getElementById("joinName");
+      if (nameEl) {
+        const name = cleanName(nameEl.value, "");
+        if (!name) { toast("Vul je naam in."); return; }
+        const cur = app.profile || { icon: "glass", color: "blue" };
+        persistProfile({ name, icon: cur.icon, color: cur.color });
+        app.ui.joinName = name;
+      }
+      joinRoom(readCodeInput());
+    }
     if (form.dataset.act === "add-player") addDraft(app.ui.addName || "");
     if (form.dataset.act === "register") authSubmit(true);
     if (form.dataset.act === "login-form") authSubmit(false);
@@ -2609,6 +2886,8 @@ function addDraft(name) {
   }
   function onKey(e) {
     if (e.key === "Escape") {
+      if (app.ui.camera) { stopCamera(); render(); return; }
+      if (app.ui.crop) { closeCrop(); render(); return; }
       if (app.ui.rules) { app.ui.rules = ""; render(); return; }
       if (app.overlay === "login") { app.overlay = null; app.ui.authHint = ""; render(); return; }
       if (app.ui.confirmLeave) { app.ui.confirmLeave = false; render(); return; }
@@ -2631,6 +2910,15 @@ function addDraft(name) {
     app.root.addEventListener("click", onClick);
     app.root.addEventListener("input", onInput);
     app.root.addEventListener("change", (e) => {
+      const photoSource = { stylePhoto: "style", settingsPhoto: "settings", styleCamera: "style", settingsCamera: "settings" }[e.target && e.target.id];
+      if (photoSource) {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        if (file.size > 8 * 1024 * 1024) { toast("Foto is te groot. Max 8 MB."); return; }
+        e.target.value = "";
+        openCrop(file, photoSource);
+        return;
+      }
       if (!e.target || e.target.id !== "mFile") return;
       const name = document.getElementById("mFileName");
       const file = e.target.files && e.target.files[0];
@@ -2662,6 +2950,8 @@ function addDraft(name) {
     let n = 0;
     const check = (cond, msg) => { if (!cond) throw new Error(msg || "check faalde"); n += 1; };
     const norm = normalizeCode("k7mp");
+    check(cleanPhoto("/media/avatars/ava-abc.jpg") === "/media/avatars/ava-abc.jpg", "foto pad");
+    check(cleanPhoto("https://example.com/a.jpg") === "", "geen vreemde foto");
     check(norm.code === "K7MP" && !norm.bad, "code");
     const bad = normalizeCode("KOMP");
     check(bad.bad && bad.code === "KMP", "geen O");
