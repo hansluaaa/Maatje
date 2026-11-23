@@ -1,5 +1,70 @@
 {
-  "users": [],
-  "sessions": [],
-  "groups": []
+  "users": [
+    {
+      "id": "5585beff-48c5-445f-adb6-b2ed2b458647",
+      "name": "Jaap",
+      "passwordHash": "d908bde13b3f80d9ae594fabe1aa360dd628edde009059ab4ac15a21fd70f38d",
+      "passwordSalt": "fd1acd0a23bca24a4d3f8fefbd97476d",
+      "email": "robingala2009@gmail.com",
+      "verified": true,
+      "verifyToken": "",
+      "googleSub": "",
+      "icon": "glass",
+      "color": "blue",
+      "age": "16-18",
+      "createdAt": 1795176733823,
+      "photo": ""
+    },
+    {
+      "id": "715a744e-0b41-4544-8eaf-0c5697aec147",
+      "name": "Hans",
+      "passwordHash": "",
+      "passwordSalt": "",
+      "email": "hans.lua123@gmail.com",
+      "verified": true,
+      "googleSub": "111784585157229799183",
+      "icon": "glass",
+      "color": "blue",
+      "age": "20-25",
+      "createdAt": 1795422171656
+    }
+  ],
+  "sessions": [
+    {
+      "token": "5f5bc448f028fee98768cb5516d9deb51dc1a49d6b629d7f",
+      "userId": "5585beff-48c5-445f-adb6-b2ed2b458647",
+      "createdAt": 1795176877391
+    }
+  ],
+  "groups": [
+    {
+      "id": "eb85a2ed-1ec7-48b5-bbc1-3fecc08f7fe1",
+      "name": "Vincent",
+      "code": "DUP8",
+      "ownerId": "5585beff-48c5-445f-adb6-b2ed2b458647",
+      "icon": "crown",
+      "color": "blue",
+      "age": "16-18",
+      "activeRoom": "",
+      "activeRoomAt": 0,
+      "members": [
+        {
+          "userId": "5585beff-48c5-445f-adb6-b2ed2b458647",
+          "name": "Jaap",
+          "icon": "glass",
+          "color": "blue",
+          "photo": ""
+        }
+      ],
+      "questions": [],
+      "segments": [],
+      "evenings": [],
+      "createdAt": 1795177575691,
+      "pending": [],
+      "passwordHash": "",
+      "passwordSalt": "",
+      "access": "invite",
+      "photo": "/media/groups/grp-eb85a2ed-1ec7-48b5-bbc1-3fecc08f7fe1.jpg"
+    }
+  ]
 }

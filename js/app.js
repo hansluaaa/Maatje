@@ -190,6 +190,7 @@
     token: "",
     account: null,
     groups: [],
+    requests: [],
     config: { googleClientId: "" },
     groupId: "",
     seen: new Set(),
@@ -256,6 +257,15 @@
     if (/^\/media\/avatars\/ava-[a-z0-9-]+\.jpg$/i.test(url)) return url;
     if (/^data:image\/jpeg;base64,[a-z0-9+/=]+$/i.test(url) && url.length < 140000) return url;
     return "";
+  }
+  function cleanGroupPhoto(value) {
+    const url = String(value || "");
+    return /^\/media\/groups\/grp-[a-z0-9-]+\.jpg$/i.test(url) ? url : "";
+  }
+  function groupMark(g) {
+    const photo = cleanGroupPhoto(g && g.photo);
+    if (photo) return `<img class="group-photo" src="${esc(photo)}" alt="">`;
+    return `<span class="group-photo is-empty" aria-hidden="true">${iconSvg((g && g.icon) || "crown")}</span>`;
   }
   function faceHtml(person) {
     const photo = cleanPhoto(person && person.photo);
@@ -353,6 +363,11 @@
     const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
     const source = c.source;
     closeCrop();
+    if (source === "group") {
+      uploadGroupPhoto(dataUrl);
+      render();
+      return;
+    }
     if (!app.draft) app.draft = { ...(app.profile || { name: "", icon: "glass", color: "blue" }) };
     app.draft.photo = dataUrl;
     if (source === "settings") {
@@ -383,7 +398,8 @@
       });
   }
   function openCameraFile(source) {
-    const el = document.getElementById(source === "settings" ? "settingsCamera" : "styleCamera");
+    const ids = { settings: "settingsCamera", group: "groupCamera" };
+    const el = document.getElementById(ids[source] || "styleCamera");
     if (el) el.click();
     else toast("Geen camera gevonden. Kies een foto uit je bestanden.");
   }
@@ -1503,6 +1519,86 @@
     clearTimeout(app.ui.toastTimer);
     app.ui.toastTimer = setTimeout(() => { const n = document.querySelector(".toast"); if (n) n.remove(); }, 2400);
   }
+  function groupLink(code) {
+    const u = new URL(location.href);
+    u.hash = "";
+    u.search = "";
+    u.searchParams.set("groep", code);
+    return u.toString();
+  }
+  function clearGroupParam() {
+    try {
+      const u = new URL(location.href);
+      if (!u.searchParams.has("groep")) return;
+      u.searchParams.delete("groep");
+      history.replaceState({}, "", u.pathname + u.search + u.hash);
+    } catch (e) {}
+  }
+  function takeGroupLink() {
+    const code = normalizeCode(new URLSearchParams(location.search).get("groep") || "").code;
+    if (code.length !== 4) return false;
+    if (!app.authReady || app.screen === "style") return false;
+    if (app.ui.joiningGroup === code) return true;
+    if (app.mode) { toast("Stop het spel eerst. De groeplink blijft staan."); return true; }
+    if (!app.account) {
+      app.overlay = "login";
+      app.ui.authMode = app.ui.authMode === "register" ? "register" : "login";
+      app.ui.authHint = "Log in of maak een account. Daarna kom je in de groep.";
+      render();
+      return true;
+    }
+    if (app.account.verified === false) { showCheckMail(app.account.email, app.ui.previewLink); return true; }
+    const already = (app.groups || []).find((g) => g.code === code);
+    if (already) {
+      app.groupId = already.id;
+      app.screen = "group";
+      app.overlay = null;
+      clearGroupParam();
+      render();
+      return true;
+    }
+    app.ui.joiningGroup = code;
+    api("/api/groups/join", { method: "POST", body: { code, password: app.ui.groupPassword || "" } })
+      .then((data) => finishGroupJoin(data))
+      .catch((err) => failGroupJoin(err, code));
+    return true;
+  }
+  function finishGroupJoin(data) {
+    app.ui.joiningGroup = "";
+    app.ui.groupNeedPassword = false;
+    app.ui.groupPassword = "";
+    if (data.pending) {
+      const req = data.request || {};
+      app.requests = (app.requests || []).filter((r) => r.id !== req.id).concat(req.id ? [req] : []);
+      clearGroupParam();
+      app.screen = "groups";
+      toast("Aanvraag verstuurd. De host moet je toelaten.");
+      render();
+      return;
+    }
+    app.requests = (app.requests || []).filter((r) => r.id !== data.group.id);
+    app.groups = (app.groups || []).filter((g) => g.id !== data.group.id).concat(data.group);
+    app.groupId = data.group.id;
+    app.screen = "group";
+    app.overlay = null;
+    clearGroupParam();
+    toast("Je zit in " + data.group.name);
+    render();
+  }
+  function failGroupJoin(err, code) {
+    app.ui.joiningGroup = "";
+    if (err && err.need === "password") {
+      app.ui.groupNeedPassword = true;
+      app.ui.groupCode = code;
+      app.screen = "groups";
+      clearGroupParam();
+      toast(err.message);
+      render();
+      return;
+    }
+    toast(err.message);
+    render();
+  }
   async function copyText(text) {
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(text); return true; }
@@ -1557,18 +1653,26 @@
         let data = {};
         try { data = text ? JSON.parse(text) : {}; } catch (e) { data = {}; }
         if (res.status === 401 && /^(Niet ingelogd|Log eerst in\.)$/.test(data.error || "")) dropSession();
-        if (!res.ok) throw new Error(data.error || "De server gaf geen duidelijk antwoord (" + res.status + ").");
+        if (res.status === 405) throw new Error("Op deze link kun je geen account maken. Open localhost:8080 via Start-Maatje.");
+        if (!res.ok) {
+          const err = new Error(data.error || "De server gaf geen duidelijk antwoord (" + res.status + ").");
+          err.need = data.need || "";
+          throw err;
+        }
         return data;
       })
       .catch((err) => {
-        if (err && err.message && !/failed to fetch|networkerror|load failed/i.test(err.message)) throw err;
-        throw new Error("Geen verbinding met de accountserver. Open de site via Start-Maatje op localhost:8080.");
+        const msg = String((err && (err.message || err)) || "");
+        if (err && err.message && !/failed to fetch|networkerror|load failed|network error/i.test(msg)) throw err;
+        const host = location.host.replace(/^localhost\b/, "127.0.0.1");
+        throw new Error("Geen verbinding met de accountserver. Laat het zwarte Maatje-venster open en open http://" + host + "/");
       });
   }
   function dropSession() {
     app.token = "";
     app.account = null;
     app.groups = [];
+    app.requests = [];
     try { localStorage.removeItem("maatje.token"); } catch (e) {}
   }
   function setSession(data) {
@@ -1586,6 +1690,7 @@
       if (data.user) app.account = data.user;
     }
     if (data.groups) app.groups = data.groups;
+    if (data.requests) app.requests = data.requests;
     app.overlay = null;
   }
   function applyMemes(list) {
@@ -1662,14 +1767,14 @@
       app.config = cfg || { googleClientId: "" };
       if (app.config.googleClientId) loadGoogle();
       if (!app.token) return null;
-      return api("/api/me").then((data) => setSession({ token: app.token, user: data.user, groups: data.groups }));
+      return api("/api/me").then((data) => setSession({ token: app.token, user: data.user, groups: data.groups, requests: data.requests || [] }));
     }).catch((err) => {
       const gone = err && /Niet ingelogd|Log eerst in/.test(err.message);
       if (app.token || gone) dropSession();
       if (gone) toast("Dit account is gewist. Maak een nieuw account.");
     }).then(() => api("/api/questions").then((data) => applyQuestions(data && data.questions)).catch(() => {}))
       .then(() => api("/api/memes").then((data) => applyMemes(data && data.memes)).catch(() => {}))
-      .then(() => { app.authReady = true; render(); });
+      .then(() => { app.authReady = true; if (!takeGroupLink()) render(); });
   }
   function loadGoogle() {
     if (window.google || document.getElementById("googleSdk")) return;
@@ -1688,11 +1793,17 @@
       callback: (resp) => { if (resp && resp.credential) googleLogin(resp.credential); },
     });
     el.innerHTML = "";
-    google.accounts.id.renderButton(el, { theme: "filled_black", size: "large", shape: "pill", width: 280, text: "continue_with" });
+    const width = Math.max(240, Math.min(400, Math.round(el.clientWidth || el.parentElement.clientWidth || 360)));
+    google.accounts.id.renderButton(el, { theme: "outline", size: "large", shape: "rectangular", width, text: "continue_with", logo_alignment: "center" });
   }
   function googleLogin(credential) {
     api("/api/google", { method: "POST", body: { credential } })
-      .then((data) => { setSession(data); toast("Ingelogd met Google"); render(); })
+      .then((data) => {
+        setSession(data);
+        if (takeGroupLink()) return;
+        toast("Ingelogd met Google");
+        render();
+      })
       .catch((err) => toast(err.message));
   }
   function showCheckMail(email, previewLink) {
@@ -1725,6 +1836,7 @@
         if (data.pending) { showCheckMail(data.email, data.previewLink); return; }
         setSession(data);
         app.ui.authHint = "";
+        if (takeGroupLink()) return;
         toast(register ? "Account gemaakt. Je bent ingelogd." : (data.user && data.user.verified === false ? "Ingelogd. Bevestig je mail om met een code te spelen." : "Welkom terug"));
         render();
       })
@@ -1754,6 +1866,32 @@
     app.overlay = null;
     render();
   }
+  function refreshAccount() {
+    if (!app.token) return;
+    api("/api/me").then((data) => {
+      app.account = data.user || app.account;
+      app.groups = data.groups || [];
+      app.requests = data.requests || [];
+      render();
+    }).catch(() => {});
+  }
+  function uploadGroupPhoto(dataUrl) {
+    const id = app.groupId;
+    if (!id) return;
+    const apply = (data) => {
+      if (data && data.group) app.groups = app.groups.map((g) => g.id === data.group.id ? data.group : g);
+      render();
+    };
+    if (!dataUrl) {
+      api("/api/groups/" + encodeURIComponent(id), { method: "PATCH", body: { photo: "" } })
+        .then(apply)
+        .catch((err) => toast(err.message));
+      return;
+    }
+    api("/api/groups/" + encodeURIComponent(id) + "/photo", { method: "POST", body: { data: String(dataUrl).split(",")[1] || "" } })
+      .then(apply)
+      .catch((err) => toast(err.message));
+  }
   function linkGroupRoom(groupId, code) {
     api("/api/groups/" + encodeURIComponent(groupId) + "/room", { method: "POST", body: { code } })
       .then((data) => {
@@ -1782,13 +1920,17 @@
     app.screen = "lobby";
     render();
   }
+  function memberBits(g) {
+    return (g.members || []).slice(0, 8).map((m) => `<li><span class="ava" style="--c:${colorHex(m.color)}">${faceHtml(m)}</span><span><b>${esc(m.name)}</b>${m.userId === g.ownerId ? "<small>host</small>" : ""}</span></li>`).join("");
+  }
   function homeGroups() {
     if (location.protocol === "file:") return "";
     if (!app.account) {
-      return `<section class="section-head"><p class="kicker">Groepen</p><h2>Speel vaker met dezelfde mensen.</h2><p class="lede">Maak een account, start een groep en bewaar jullie eigen vragen.</p><div class="stack" style="max-width:280px;margin-top:12px"><button type="button" class="btn btn-primary" data-act="signup">Account maken</button></div></section>`;
+      return `<section class="home-groups"><p class="kicker">Groepen</p><h2>Speel vaker met dezelfde mensen.</h2><p class="lede">Maak een account, start een groep en bewaar jullie eigen vragen.</p><div class="stack"><button type="button" class="btn btn-primary" data-act="signup">Account maken</button></div></section>`;
     }
-    const cards = (app.groups || []).map((g) => `<button type="button" class="group-card gcard" data-act="open-group" data-id="${esc(g.id)}"><span class="kicker">${esc(g.code)}</span><h3>${esc(g.name)}</h3><div class="faces">${(g.members || []).slice(0, 8).map((m) => `<span class="ava" style="--c:${colorHex(m.color)}">${faceHtml(m)}</span>`).join("")}</div><span class="fine">${(g.members || []).length} ${g.members.length === 1 ? "persoon" : "mensen"} · vragen ${esc((AGES.find((a) => a.id === g.age) || {}).label || "")}</span></button>`).join("");
-    return `<section><div class="section-head"><p class="kicker">Jouw groepen</p><h2>${app.groups.length ? "Waar je vaker mee speelt." : "Nog geen groep."}</h2></div><div class="group-grid">${cards}<button type="button" class="group-card gcard" data-act="groups"><h3>Nieuwe groep</h3><p>Of doe mee met een groepscode.</p></button></div></section>`;
+    const cards = (app.groups || []).map((g) => `<article class="gcard group-tile"><button type="button" class="group-open" data-act="open-group" data-id="${esc(g.id)}"><span class="kicker">${esc(g.code)}</span>${groupMark(g)}<h3>${esc(g.name)}</h3><ul class="member-row">${memberBits(g)}</ul><span class="fine">${(g.members || []).length} ${(g.members || []).length === 1 ? "persoon" : "mensen"} · vragen ${esc((AGES.find((a) => a.id === g.age) || {}).label || "")}</span></button><button type="button" class="btn btn-text group-copy" data-act="copy-group" data-code="${esc(g.code)}">Kopieer link</button></article>`).join("");
+    const alone = !app.groups.length;
+    return `<section class="home-groups"><p class="kicker">Jouw groepen</p><h2>${app.groups.length ? "Waar je vaker mee speelt." : "Nog geen groep."}</h2><div class="group-grid${alone ? " one" : ""}">${cards}<button type="button" class="group-card gcard" data-act="groups"><h3>Nieuwe groep</h3><p>Of doe mee met een groepscode.</p></button></div></section>`;
   }
   function loginHtml() {
     if (app.overlay !== "login") return "";
@@ -1800,9 +1942,10 @@
     }
     const reg = app.ui.authMode === "register";
     const google = !reg && app.config.googleClientId
-      ? `<div id="googleSlot"></div><p class="or">of met e-mail</p>`
+      ? `<p class="or">of</p><div class="google-signin"><span class="google-face" aria-hidden="true"><svg class="g-logo" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>Doorgaan met Google</span><div id="googleSlot"></div></div>`
       : (!reg ? `<p class="note">Google zet je aan door een client-id in config.json te zetten.</p>` : "");
-    const hint = app.ui.authHint || (reg ? (app.config && app.config.mail ? "Je krijgt een mail om het adres te bevestigen." : "Daarna ben je meteen ingelogd.") : "Kijken en op één telefoon spelen mag zonder account.");
+    const onPages = /(^|\.)github\.io$/.test(location.hostname);
+    const hint = app.ui.authHint || (onPages ? "Dit is alleen de website. Een account maak je op de computer via Start-Maatje, op localhost:8080." : (reg ? (app.config && app.config.mail ? "Je krijgt een mail om het adres te bevestigen." : "Daarna ben je meteen ingelogd.") : "Kijken en op één telefoon spelen mag zonder account."));
     const emailField = reg ? `<label class="field">E-mail<input id="authEmail" type="email" maxlength="80" autocomplete="email" value="${esc(app.ui.authEmail || "")}"></label>` : "";
     const err = app.error ? `<p class="auth-error">${esc(app.error)}</p>` : "";
     return `<div class="modal" data-act="close-login"><div class="panel auth" data-act="stop" role="dialog" aria-modal="true"><h3>${reg ? "Account maken" : "Inloggen"}</h3><p class="fine">${esc(hint)}</p>${err}<form data-act="${reg ? "register" : "login-form"}" class="auth-grid"><label class="field">${reg ? "Naam" : "E-mail of naam"}<input id="authName" maxlength="80" autocomplete="username" value="${esc(app.ui.authName || "")}"></label>${emailField}<label class="field">Wachtwoord<input id="authPass" type="password" maxlength="64" autocomplete="${reg ? "new-password" : "current-password"}" value="${esc(app.ui.authPass || "")}"></label><button class="btn btn-primary" type="button" data-act="${reg ? "do-register" : "do-login"}">${reg ? "Account maken" : "Inloggen"}</button></form>${google}<button type="button" class="btn btn-text" data-act="auth-toggle">${reg ? "Ik heb al een account" : "Nog geen account"}</button><button type="button" class="btn btn-ghost" data-act="close-login">Sluiten</button></div></div>`;
@@ -1811,7 +1954,7 @@
     const members = g.members || [];
     const people = members.length === 1 ? "1 persoon" : members.length + " mensen";
     const age = (AGES.find((a) => a.id === g.age) || {}).label || "20–25";
-    const faces = members.slice(0, 8).map((m) => `<li><span class="ava" style="--c:${colorHex(m.color)}">${faceHtml(m)}</span><b>${esc(m.name)}</b></li>`).join("");
+    const faces = memberBits(g);
     const questions = (g.questions || []).length;
     const evenings = (g.evenings || []).length;
     const segments = (g.segments || []).length;
@@ -1819,15 +1962,17 @@
     if (questions) bits.push(questions === 1 ? "1 eigen vraag" : questions + " eigen vragen");
     if (evenings) bits.push(evenings === 1 ? "1 avond" : evenings + " avonden");
     if (segments) bits.push(segments === 1 ? "1 vakje" : segments + " vakjes");
-    return `<button type="button" class="group-card gcard group-tile" data-act="open-group" data-id="${esc(g.id)}"><div class="tile-top"><span class="kicker">${esc(g.code)}</span><span class="fine">Openen</span></div><h3>${esc(g.name)}</h3><ul class="member-row">${faces}</ul><div class="tile-meta">${bits.map((bit) => `<span>${esc(bit)}</span>`).join("")}</div></button>`;
+    return `<article class="gcard group-tile"><button type="button" class="group-open" data-act="open-group" data-id="${esc(g.id)}"><div class="tile-top"><span class="kicker">${esc(g.code)}</span><span class="fine">Openen</span></div>${groupMark(g)}<h3>${esc(g.name)}</h3><ul class="member-row">${faces}</ul><div class="tile-meta">${bits.map((bit) => `<span>${esc(bit)}</span>`).join("")}</div></button><button type="button" class="btn btn-text group-copy" data-act="copy-group" data-code="${esc(g.code)}">Kopieer link</button></article>`;
   }
   function drawGroups() {
     const groups = app.groups || [];
     const tiles = groups.map(groupTile).join("");
+    const passField = app.ui.groupNeedPassword ? `<label class="field">Groepswachtwoord<input id="groupPass" type="password" maxlength="64" autocomplete="off" value="${esc(app.ui.groupPassword || "")}"></label>` : "";
+    const waiting = (app.requests || []).map((r) => `<p class="note">Je wacht tot de host je toelaat bij ${esc(r.name)}.</p>`).join("");
     const list = tiles
       ? `<div class="section-head"><p class="kicker">Jullie groepen</p></div><div class="group-grid${groups.length === 1 ? " one" : ""}">${tiles}</div>`
       : `<p class="fine">Nog niks. Maak er een, of vraag de code.</p>`;
-    return `<div class="wrap groups-page">${topbar()}<div class="groups-head"><div><p class="kicker">Groepen</p><h2>Jullie vaste tafel.</h2><p class="lede">Eigen vragen, vakjes op het rad, en de stand van de vorige avond.</p></div><button type="button" class="btn btn-text" data-act="logout">Uitloggen</button></div><div class="lobby-layout"><section class="lobby-card"><h3>Nieuwe groep</h3><p class="fine">Een code voor dezelfde mensen, telkens weer.</p><form data-act="create-group" class="auth-grid"><label class="field">Naam<input id="groupName" maxlength="16" placeholder="Vrijdag" value="${esc(app.ui.groupName || "")}"></label><button class="btn btn-primary" type="submit">Maak groep</button></form></section><section class="lobby-card"><h3>Meedoen</h3><p class="fine">Vraag de code aan wie de groep heeft gemaakt.</p><form data-act="join-group" class="auth-grid"><label class="field">Groepscode<input id="groupCode" maxlength="4" autocapitalize="characters" placeholder="K7MP" value="${esc(app.ui.groupCode || "")}"></label><button class="btn btn-primary" type="submit">Doe mee</button></form></section></div>${list}</div>`;
+    return `<div class="wrap groups-page">${topbar()}<div class="groups-head"><div><p class="kicker">Groepen</p><h2>Jullie vaste tafel.</h2><p class="lede">Eigen vragen, vakjes op het rad, en de stand van de vorige avond.</p></div><button type="button" class="btn btn-text" data-act="logout">Uitloggen</button></div><div class="lobby-layout"><section class="lobby-card"><h3>Nieuwe groep</h3><p class="fine">Een code voor dezelfde mensen, telkens weer.</p><form data-act="create-group" class="auth-grid"><label class="field">Naam<input id="groupName" maxlength="16" placeholder="Vrijdag" value="${esc(app.ui.groupName || "")}"></label><button class="btn btn-primary" type="submit">Maak groep</button></form></section><section class="lobby-card"><h3>Meedoen</h3><p class="fine">Vraag de code aan wie de groep heeft gemaakt.</p><form data-act="join-group" class="auth-grid"><label class="field">Groepscode<input id="groupCode" maxlength="4" autocapitalize="characters" placeholder="K7MP" value="${esc(app.ui.groupCode || "")}"></label>${passField}<button class="btn btn-primary" type="submit">Doe mee</button></form></section></div>${waiting}${list}</div>`;
   }
   function groupExtras(g) {
     const months = ["jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "okt", "nov", "dec"];
@@ -1844,11 +1989,23 @@
     const segs = (g.segments || []).map((s) => `<li class="prow"><span class="who"><b>${esc(s.label)}</b><small>${esc(whoLabel[s.who] || s.who)}${s.sips ? " · " + s.sips : ""}${s.text ? " · " + esc(s.text) : ""}</small></span><button type="button" data-act="remove-segment" data-id="${esc(s.id)}" aria-label="Vakje weghalen">×</button></li>`).join("");
     return `<section class="lobby-card" style="margin-top:16px"><p class="kicker">Avonden</p>${evenings ? `<ul class="plist">${evenings}</ul>` : `<p class="fine">Speel een spel vanuit deze groep en stop daarna. De stand komt hier.</p>`}</section><section class="lobby-card" style="margin-top:16px"><p class="kicker">Eigen vakjes</p><p class="fine">Die komen bij Het Rad, naast de vaste vakjes.</p><ul class="plist">${segs}</ul><form data-act="add-segment" class="auth-grid"><label class="field">Korte naam<input id="segLabel" maxlength="10" placeholder="Jarige"></label><label class="field">Wat er gebeurt<input id="segText" maxlength="80" placeholder="De jarige drinkt niet"></label><label class="field">Slokken<input id="segSips" type="number" min="0" max="4" value="0"></label><label class="field">Wie<select id="segWho"><option value="none">Niemand</option><option value="self">Jij</option><option value="all">Iedereen</option><option value="left">Links</option><option value="right">Rechts</option><option value="give">Iemand kiezen</option></select></label><button class="btn btn-primary" type="submit">Op het rad</button></form></section>`;
   }
+  function groupGate(g, mine) {
+    if (!mine) return "";
+    const access = g.access === "password" || g.access === "invite" ? g.access : "open";
+    const showPass = access === "password" || app.ui.groupPassEdit;
+    const hint = showPass && access !== "password" ? "Kies een wachtwoord. Daarna hebben ze de code en het wachtwoord nodig." : (access === "password" ? "Ze hebben de code en het wachtwoord nodig." : (access === "invite" ? "Ze vragen het. Jij laat ze toe." : "Iedereen met de code of de link komt erbij."));
+    const chips = [["open", "Open"], ["password", "Wachtwoord"], ["invite", "Uitnodiging"]].map(([id, label]) => `<button type="button" class="chip ${access === id ? "is-on" : ""}" data-act="group-access" data-access="${id}">${label}</button>`).join("");
+    const passForm = showPass ? `<form data-act="save-group-pass" class="auth-grid"><label class="field">${access === "password" ? "Nieuw wachtwoord" : "Wachtwoord"}<input id="groupSetPass" type="password" maxlength="64" autocomplete="new-password"></label><button class="btn btn-primary" type="submit">${access === "password" ? "Wachtwoord wijzigen" : "Zet wachtwoord"}</button></form>` : "";
+    const asks = (g.pending || []).map((m) => `<li class="prow"><span class="ava" style="--c:${colorHex(m.color)}">${faceHtml(m)}</span><span class="who"><b>${esc(m.name)}</b><small>wil erbij</small></span><span class="ask-actions"><button type="button" class="btn btn-primary" data-act="accept-member" data-id="${esc(m.userId)}">Toelaten</button><button type="button" class="btn btn-ghost" data-act="decline-member" data-id="${esc(m.userId)}">Weigeren</button></span></li>`).join("");
+    const askBlock = asks ? `<p class="kicker" style="margin-top:16px">Aanvragen</p><ul class="plist">${asks}</ul>` : (access === "invite" ? `<p class="fine">Nog geen aanvragen.</p>` : "");
+    return `<p class="kicker" style="margin-top:16px">Wie mag erbij</p><div class="chips">${chips}</div><p class="fine">${hint}</p>${passForm}${askBlock}`;
+  }
   function drawGroup() {
     const g = (app.groups || []).find((x) => x.id === app.groupId);
     if (!g) return `<div class="narrow">${topbar()}<p>Die groep is er niet.</p><button type="button" class="btn btn-primary" data-act="groups">Terug</button></div>`;
     const mine = app.account && g.ownerId === app.account.id;
-    return `<div class="wrap">${topbar()}<p class="kicker">Groep ${esc(g.code)}</p><h2>${esc(g.name)}</h2><p class="fine">${mine ? "Jij hebt deze groep gemaakt." : "Je zit in deze groep."} Deel de code ${esc(g.code)}.</p><div class="lobby-layout"><section class="lobby-card"><p class="kicker">Mensen</p><ul class="plist">${(g.members || []).map((m, i) => `<li class="prow"><span class="ord">${i + 1}</span><span class="ava" style="--c:${colorHex(m.color)}">${faceHtml(m)}</span><span class="who"><b>${esc(m.name)}</b><small>${app.account && m.userId === app.account.id ? "jij" : ""}</small></span></li>`).join("")}</ul><div class="stack" style="margin-top:12px"><button type="button" class="btn btn-primary" data-act="group-local">Speel op één telefoon</button><button type="button" class="btn btn-ghost" data-act="group-room">Start een kamer</button></div></section><section class="lobby-card"><p class="kicker">Leeftijd voor vragen</p>${AGES.map((a) => `<button type="button" class="chip ${g.age === a.id ? "is-on" : ""}" data-act="group-age" data-age="${a.id}">${a.label}</button>`).join(" ")}<p class="fine">${esc((AGES.find((a) => a.id === g.age) || AGES[2]).hint)}</p><p class="kicker" style="margin-top:16px">Eigen vragen</p><ul class="plist">${(g.questions || []).map((q) => `<li class="prow"><span class="who"><b>${esc(q.text)}</b><small>${esc(q.by || "")}</small></span></li>`).join("") || `<li class="fine">Nog geen eigen vragen.</li>`}</ul><form data-act="add-question" class="auth-grid" style="margin-top:10px"><label class="field">Nieuwe vraag<input id="customQ" maxlength="180" placeholder="Wijs aan: wie regelt de bitterballen?" value="${esc(app.ui.customQ || "")}"></label><button class="btn btn-primary" type="submit">Bewaar vraag</button></form></section></div>${groupExtras(g)}<button type="button" class="btn btn-text" data-act="leave-group">Groep verlaten</button></div>`;
+    const localLink = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+    return `<div class="wrap">${topbar()}<div class="group-hero">${groupMark(g)}<div><p class="kicker">Groep ${esc(g.code)}</p><h2>${esc(g.name)}</h2><p class="fine">${mine ? "Jij hebt deze groep gemaakt." : "Je zit in deze groep."} Deel de code ${esc(g.code)}, of stuur de link.</p></div></div>${mine ? photoPicker("groupPhoto", g, "group") : ""}<div class="group-share"><button type="button" class="btn btn-ghost" data-act="copy-group" data-code="${esc(g.code)}">Kopieer link</button></div>${localLink ? `<p class="fine">Die link werkt voor anderen pas als je de site via het wifi-adres uit het zwarte venster opent.</p>` : ""}<div class="lobby-layout"><section class="lobby-card"><p class="kicker">Mensen</p><ul class="plist">${(g.members || []).map((m, i) => `<li class="prow"><span class="ord">${i + 1}</span><span class="ava" style="--c:${colorHex(m.color)}">${faceHtml(m)}</span><span class="who"><b>${esc(m.name)}</b><small>${[app.account && m.userId === app.account.id ? "jij" : "", m.userId === g.ownerId ? "host" : ""].filter(Boolean).join(" · ")}</small></span></li>`).join("")}</ul>${groupGate(g, mine)}<div class="stack" style="margin-top:12px"><button type="button" class="btn btn-primary" data-act="group-local">Speel op één telefoon</button><button type="button" class="btn btn-ghost" data-act="group-room">Start een kamer</button></div></section><section class="lobby-card"><p class="kicker">Leeftijd voor vragen</p>${AGES.map((a) => `<button type="button" class="chip ${g.age === a.id ? "is-on" : ""}" data-act="group-age" data-age="${a.id}">${a.label}</button>`).join(" ")}<p class="fine">${esc((AGES.find((a) => a.id === g.age) || AGES[2]).hint)}</p><p class="kicker" style="margin-top:16px">Eigen vragen</p><ul class="plist">${(g.questions || []).map((q) => `<li class="prow"><span class="who"><b>${esc(q.text)}</b><small>${esc(q.by || "")}</small></span></li>`).join("") || `<li class="fine">Nog geen eigen vragen.</li>`}</ul><form data-act="add-question" class="auth-grid" style="margin-top:10px"><label class="field">Nieuwe vraag<input id="customQ" maxlength="180" placeholder="Wijs aan: wie regelt de bitterballen?" value="${esc(app.ui.customQ || "")}"></label><button class="btn btn-primary" type="submit">Bewaar vraag</button></form></section></div>${groupExtras(g)}<button type="button" class="btn btn-text" data-act="leave-group">Groep verlaten</button></div>`;
   }
   function applyTheme(theme) {
     const choice = ["system", "dark", "light"].includes(theme) ? theme : "dark";
@@ -2042,11 +2199,12 @@
   function howTvArt() {
     return `<svg viewBox="0 0 36 28" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="2" y="3" width="32" height="18" rx="2"/><path d="M12 25h12" stroke-linecap="round"/></svg>`;
   }
-  function photoPicker(id, person) {
-    const has = !!cleanPhoto(person && person.photo);
-    const source = id === "settingsPhoto" ? "settings" : "style";
-    const camId = source === "settings" ? "settingsCamera" : "styleCamera";
-    return `<label class="field">Eigen foto<span class="file-row"><input id="${id}" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"><span class="file-btn">Kies een foto</span><span>${has ? "Foto gekozen" : "Geen foto"}</span></span></label><button type="button" class="btn btn-ghost photo-cam" data-act="take-photo" data-source="${source}">Maak een foto</button><input id="${camId}" class="sr-file" type="file" accept="image/*" capture="user">${has ? `<button type="button" class="btn btn-text" data-act="clear-photo">Foto weghalen</button>` : ""}<p class="fine">Op je telefoon opent de camera. Op een laptop de webcam, als die er is. Daarna kies je welk stuk blijft.</p>`;
+  function photoPicker(id, person, source) {
+    const use = source || (id === "settingsPhoto" ? "settings" : "style");
+    const has = use === "group" ? !!cleanGroupPhoto(person && person.photo) : !!cleanPhoto(person && person.photo);
+    const camId = use === "settings" ? "settingsCamera" : (use === "group" ? "groupCamera" : "styleCamera");
+    const clearAct = use === "group" ? "clear-group-photo" : "clear-photo";
+    return `<label class="field">${use === "group" ? "Groepsfoto" : "Eigen foto"}<span class="file-row"><input id="${id}" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"><span class="file-btn">Kies een foto</span><span>${has ? "Foto gekozen" : "Geen foto"}</span></span></label><button type="button" class="btn btn-ghost photo-cam" data-act="take-photo" data-source="${use}">Maak een foto</button><input id="${camId}" class="sr-file" type="file" accept="image/*" capture="user">${has ? `<button type="button" class="btn btn-text" data-act="${clearAct}">Foto weghalen</button>` : ""}<p class="fine">${use === "group" ? "Die foto zie je op de groepskaart." : "Op je telefoon opent de camera. Op een laptop de webcam, als die er is. Daarna kies je welk stuk blijft."}</p>`;
   }
   function howHead() {
     return `<div class="how-mark">${logoSvg()}</div><h1 class="how-title">Maatje</h1>`;
@@ -2311,7 +2469,7 @@
     const gameFp = g ? [g.id, g.stage, g.turn, g.spin && g.spin.id, g.targetId, g.choice, g.cursor, g.index, g.outcome, g.note, g.banner, g.category, g.round].join(".") : "";
     const groups = Array.isArray(app.groups) ? app.groups : [];
     const players = s && Array.isArray(s.players) ? s.players : [];
-    return [view(), app.ui.crop ? 1 : 0, app.ui.camera ? 1 : 0, app.tv ? 1 : 0, app.ui.how || "", app.conn, app.error || "", app.sound ? 1 : 0, app.admin ? 1 : 0, app.questionsRev, app.memesRev, app.ui.adminTab || "", app.ui.editId || "", app.ui.noRoom ? 1 : 0, app.ui.stale ? 1 : 0, app.ui.confirmLeave ? 1 : 0, app.ui.rules || "", app.ui.filter || "", app.ui.age || "", app.ui.joinWait || "", app.overlay || "", app.ui.authMode || "", app.ui.previewLink || "", app.screen || "", app.theme || "", app.groupId || "", app.account ? app.account.id + (app.account.verified === false ? "u" : "v") : "", groups.map((g) => g.id + (g.activeRoom || "") + ((g.questions || []).length) + ":" + ((g.segments || []).length) + ":" + ((g.evenings || []).length)).join(","), app.roomCode || "", resultVisible() ? 1 : 0, app.profile ? app.profile.name + app.profile.icon + app.profile.color + (app.profile.photo ? app.profile.photo.length + app.profile.photo.slice(-8) : "") : "", app.draft ? app.draft.icon + app.draft.color + (app.draft.photo ? app.draft.photo.length : "") : "", (app.draftPlayers || []).map((p) => p.id + p.icon + p.color).join(","), s ? s.rev + ":" + s.gen + ":" + s.phase + ":" + s.hostId + ":" + players.map((p) => p.id + p.name + p.sips + p.icon + p.color).join("/") + ":" + gameFp : ""].join("~");
+    return [view(), app.ui.crop ? 1 : 0, app.ui.camera ? 1 : 0, app.tv ? 1 : 0, app.ui.how || "", app.conn, app.error || "", app.sound ? 1 : 0, app.admin ? 1 : 0, app.questionsRev, app.memesRev, app.ui.adminTab || "", app.ui.editId || "", app.ui.noRoom ? 1 : 0, app.ui.stale ? 1 : 0, app.ui.confirmLeave ? 1 : 0, app.ui.rules || "", app.ui.filter || "", app.ui.age || "", app.ui.joinWait || "", app.overlay || "", app.ui.authMode || "", app.ui.previewLink || "", app.screen || "", app.theme || "", app.groupId || "", app.ui.groupNeedPassword ? 1 : 0, app.ui.groupPassEdit ? 1 : 0, (app.requests || []).map((r) => r.id).join("."), app.account ? app.account.id + (app.account.verified === false ? "u" : "v") : "", groups.map((g) => g.id + (g.photo || "") + (g.access || "") + ((g.pending || []).map((p) => p.userId).join(".")) + (g.activeRoom || "") + ((g.members || []).length) + ":" + ((g.questions || []).length) + ":" + ((g.segments || []).length) + ":" + ((g.evenings || []).length)).join(","), app.roomCode || "", resultVisible() ? 1 : 0, app.profile ? app.profile.name + app.profile.icon + app.profile.color + (app.profile.photo ? app.profile.photo.length + app.profile.photo.slice(-8) : "") : "", app.draft ? app.draft.icon + app.draft.color + (app.draft.photo ? app.draft.photo.length : "") : "", (app.draftPlayers || []).map((p) => p.id + p.icon + p.color).join(","), s ? s.rev + ":" + s.gen + ":" + s.phase + ":" + s.hostId + ":" + players.map((p) => p.id + p.name + p.sips + p.icon + p.color).join("/") + ":" + gameFp : ""].join("~");
   }
   function captureForm() {
     const a = document.activeElement;
@@ -2548,7 +2706,11 @@ function addDraft(name) {
       render();
       return;
     }
-    if (act === "take-photo") { startCamera(t.dataset.source === "settings" ? "settings" : "style"); return; }
+    if (act === "take-photo") {
+      const source = t.dataset.source === "settings" ? "settings" : (t.dataset.source === "group" ? "group" : "style");
+      startCamera(source);
+      return;
+    }
     if (act === "camera-snap") { snapCamera(); return; }
     if (act === "camera-cancel") { stopCamera(); render(); return; }
     if (act === "crop-save") { applyCrop(); return; }
@@ -2560,6 +2722,7 @@ function addDraft(name) {
       render();
       return;
     }
+    if (act === "clear-group-photo") { uploadGroupPhoto(""); return; }
     if (act === "pick-icon" || act === "pick-color") {
       if (!app.draft) app.draft = { ...(app.profile || { name: "", icon: "glass", color: "blue" }) };
       if (act === "pick-icon") { app.draft.icon = validIcon(t.dataset.id); app.draft.photo = ""; }
@@ -2665,6 +2828,7 @@ function addDraft(name) {
       if (app.mode) { toast("Stop het spel eerst."); return; }
       app.screen = "groups";
       render();
+      refreshAccount();
       return;
     }
     if (act === "open-group") {
@@ -2672,6 +2836,7 @@ function addDraft(name) {
       app.groupId = t.dataset.id;
       app.screen = "group";
       render();
+      refreshAccount();
       return;
     }
     if (act === "logout") return logout();
@@ -2697,6 +2862,23 @@ function addDraft(name) {
         .catch((err) => toast(err.message));
       return;
     }
+    if (act === "group-access") {
+      const group = (app.groups || []).find((g) => g.id === app.groupId);
+      if (!group || !app.account || group.ownerId !== app.account.id) { toast("Alleen de host past dit aan."); return; }
+      const access = t.dataset.access;
+      if (access === "password") { app.ui.groupPassEdit = true; render(); return; }
+      app.ui.groupPassEdit = false;
+      api("/api/groups/" + encodeURIComponent(group.id), { method: "PATCH", body: { access } })
+        .then((data) => { app.groups = app.groups.map((g) => g.id === data.group.id ? data.group : g); render(); })
+        .catch((err) => toast(err.message));
+      return;
+    }
+    if (act === "accept-member" || act === "decline-member") {
+      api("/api/groups/" + encodeURIComponent(app.groupId) + "/requests", { method: "POST", body: { userId: t.dataset.id, accept: act === "accept-member" } })
+        .then((data) => { app.groups = app.groups.map((g) => g.id === data.group.id ? data.group : g); toast(act === "accept-member" ? "Toegelaten" : "Geweigerd"); render(); })
+        .catch((err) => toast(err.message));
+      return;
+    }
     if (act === "remove-segment") {
       api("/api/groups/" + encodeURIComponent(app.groupId) + "/segments", { method: "POST", body: { remove: t.dataset.id } })
         .then((data) => { app.groups = app.groups.map((g) => g.id === data.group.id ? data.group : g); render(); })
@@ -2706,7 +2888,7 @@ function addDraft(name) {
     if (act === "leave-group") {
       api("/api/groups/" + encodeURIComponent(app.groupId), { method: "POST", body: {} })
         .then(() => api("/api/me"))
-        .then((data) => { app.groups = data.groups || []; app.groupId = ""; app.screen = "groups"; render(); })
+        .then((data) => { app.groups = data.groups || []; app.requests = data.requests || []; app.groupId = ""; app.screen = "groups"; render(); })
         .catch((err) => toast(err.message));
       return;
     }
@@ -2748,6 +2930,13 @@ function addDraft(name) {
     if (act === "claim") return claimHost();
     if (act === "copy-code") {
       copyText(app.roomCode || app.ui.codeValue || "").then((ok) => toast(ok ? "Code gekopieerd" : (app.roomCode || "")));
+      return;
+    }
+    if (act === "copy-group") {
+      const code = normalizeCode(t.dataset.code || "").code;
+      if (code.length !== 4) return;
+      const link = groupLink(code);
+      copyText(link).then((ok) => toast(ok ? "Link gekopieerd" : link));
       return;
     }
     if (act === "share") return shareRoom();
@@ -2795,6 +2984,7 @@ function addDraft(name) {
     if (t.id === "authPass") app.ui.authPass = t.value;
     if (t.id === "groupName") app.ui.groupName = t.value;
     if (t.id === "groupCode") app.ui.groupCode = normalizeCode(t.value).code;
+    if (t.id === "groupPass") app.ui.groupPassword = t.value;
     if (t.id === "customQ") app.ui.customQ = t.value;
   }
   function onSubmit(e) {
@@ -2825,14 +3015,19 @@ function addDraft(name) {
     }
     if (form.dataset.act === "join-group") {
       const gc = document.getElementById("groupCode");
+      const gp = document.getElementById("groupPass");
       if (gc) app.ui.groupCode = normalizeCode(gc.value).code;
-      api("/api/groups/join", { method: "POST", body: { code: app.ui.groupCode || "" } })
-        .then((data) => {
-          app.groups = app.groups.filter((g) => g.id !== data.group.id).concat(data.group);
-          app.groupId = data.group.id;
-          app.screen = "group";
-          render();
-        }).catch((err) => toast(err.message));
+      if (gp) app.ui.groupPassword = gp.value;
+      app.ui.joiningGroup = "";
+      api("/api/groups/join", { method: "POST", body: { code: app.ui.groupCode || "", password: app.ui.groupPassword || "" } })
+        .then((data) => finishGroupJoin(data))
+        .catch((err) => failGroupJoin(err, app.ui.groupCode || ""));
+    }
+    if (form.dataset.act === "save-group-pass") {
+      const password = (document.getElementById("groupSetPass") || {}).value || "";
+      api("/api/groups/" + encodeURIComponent(app.groupId), { method: "PATCH", body: { access: "password", password } })
+        .then((data) => { app.ui.groupPassEdit = false; app.groups = app.groups.map((g) => g.id === data.group.id ? data.group : g); toast("Wachtwoord gezet"); render(); })
+        .catch((err) => toast(err.message));
     }
     if (form.dataset.act === "add-segment") {
       const label = (document.getElementById("segLabel") || {}).value || "";
@@ -2936,7 +3131,7 @@ function addDraft(name) {
     app.root.addEventListener("click", onClick);
     app.root.addEventListener("input", onInput);
     app.root.addEventListener("change", (e) => {
-      const photoSource = { stylePhoto: "style", settingsPhoto: "settings", styleCamera: "style", settingsCamera: "settings" }[e.target && e.target.id];
+      const photoSource = { stylePhoto: "style", settingsPhoto: "settings", styleCamera: "style", settingsCamera: "settings", groupPhoto: "group", groupCamera: "group" }[e.target && e.target.id];
       if (photoSource) {
         const file = e.target.files && e.target.files[0];
         if (!file) return;
@@ -2952,14 +3147,16 @@ function addDraft(name) {
     });
     app.root.addEventListener("submit", onSubmit);
     document.addEventListener("keydown", onKey);
+    const urlGroup = normalizeCode(new URLSearchParams(location.search).get("groep") || "").code;
     const urlRoom = normalizeCode(new URLSearchParams(location.search).get("room") || "").code;
     const saved = normalizeCode(sessionStorage.getItem("maatje.room") || "").code;
-    const pending = (urlRoom.length === 4 && urlRoom) || (saved.length === 4 && saved) || "";
+    const pending = urlGroup.length === 4 ? "" : ((urlRoom.length === 4 && urlRoom) || (saved.length === 4 && saved) || "");
     if (pending) app.ui.codeValue = pending;
     if (localStorage.getItem("maatje.welcomed") !== "1") {
       app.screen = "style";
       app.draft = app.profile || { name: "", icon: "glass", color: "blue" };
-      if (urlRoom.length === 4) app.afterStyle = () => joinRoom(urlRoom);
+      if (urlGroup.length === 4) app.afterStyle = () => takeGroupLink();
+      else if (urlRoom.length === 4) app.afterStyle = () => joinRoom(urlRoom);
       render();
     } else if (pending) {
       render();

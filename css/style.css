@@ -482,7 +482,14 @@ h3 { font-size: 26px; margin: 0 0 8px; }
 }
 .step h3 { font-size: 22px; margin: 0; }
 .step p { margin: 4px 0 0; color: var(--muted); }
-.foot { color: var(--muted); font-size: 13px; margin-top: 12px; max-width: 70ch; }
+.foot { color: var(--muted); font-size: 13px; margin: 28px auto 0; max-width: 70ch; text-align: center; }
+.home-groups { margin: 56px auto 0; text-align: center; }
+.home-groups h2 { margin-left: auto; margin-right: auto; }
+.home-groups .lede { margin-left: auto; margin-right: auto; }
+.home-groups .stack { width: min(280px, 100%); margin: 16px auto 0; }
+.home-groups .group-grid { width: min(720px, 100%); margin: 18px auto 0; text-align: left; }
+.home-groups .group-grid.one { width: min(340px, 100%); }
+.home-groups .group-grid.one .group-card { text-align: center; justify-items: center; }
 
 .mascot { display: none; position: relative; height: 250px; margin-top: 18px; }
 .m-wheel, .m-card, .m-q {
@@ -964,6 +971,7 @@ h3 { font-size: 26px; margin: 0 0 8px; }
 @media (min-width: 800px) {
   .gcards { grid-template-columns: repeat(2, 1fr); }
   .rule-grid { grid-template-columns: repeat(3, 1fr); gap: 40px; }
+  .rule-col:last-child:nth-child(3n + 1) { grid-column: 2; }
   .how-card { grid-template-columns: repeat(3, 1fr); }
   .how-card .step + .step { border-top: 0; border-left: 1px solid var(--line); }
   .set-grid { grid-template-columns: 1.05fr 0.95fr; }
@@ -1143,11 +1151,23 @@ html[data-theme="light"] .seg { background: #eef2f7; }
 .groups-head h2 { margin-bottom: 8px; }
 .groups-page .section-head { margin-top: 28px; }
 .group-tile { min-height: 0; gap: 12px; padding: 22px; }
+.group-open { display: grid; gap: 12px; width: 100%; margin: 0; padding: 0; border: 0; background: none; color: inherit; text-align: left; }
+.group-copy { justify-self: start; min-height: 36px; }
+.group-photo { width: 72px; height: 72px; border-radius: 18px; object-fit: cover; display: block; background: var(--input); border: 1px solid var(--line); }
+.group-photo.is-empty { display: grid; place-items: center; color: var(--ink); }
+.group-photo.is-empty svg { width: 32px; height: 32px; }
+.group-hero { display: flex; align-items: center; gap: 16px; margin: 4px 0 8px; }
+.group-hero .group-photo { width: 96px; height: 96px; flex: none; }
+.group-hero h2 { margin-bottom: 4px; }
+.group-open .group-photo { margin: 4px 0 2px; }
+.group-share .btn { width: auto; min-width: 180px; }
 .tile-top { display: flex; align-items: center; justify-content: space-between; }
 .tile-top .fine { margin: 0; }
 .member-row { display: flex; flex-wrap: wrap; gap: 12px 18px; list-style: none; margin: 0; padding: 0; }
 .member-row li { display: flex; align-items: center; gap: 8px; }
-.member-row b { font-size: 15px; font-weight: 650; }
+.member-row small { display: block; color: var(--muted); font-size: 12px; font-weight: 650; }
+.ask-actions { display: flex; gap: 8px; }
+.ask-actions .btn { width: auto; min-height: 40px; padding: 0 12px; }
 .tile-meta { display: flex; flex-wrap: wrap; gap: 8px; }
 .tile-meta span { border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; color: var(--muted); font-size: 13px; }
 .group-card, .auth-card {
@@ -1163,6 +1183,26 @@ html[data-theme="light"] .seg { background: #eef2f7; }
 .auth-grid { display: grid; gap: 10px; }
 .qcard p { font-size: clamp(22px, 4.2vw, 34px); }
 .panel.auth { width: min(420px, 100%); }
+.google-signin { position: relative; height: 52px; margin-top: 2px; }
+.google-face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border-radius: 14px;
+  border: 1px solid #dadce0;
+  background: #fff;
+  color: #1f1f1f;
+  font-weight: 650;
+  pointer-events: none;
+}
+.google-signin:hover .google-face { background: #f7f8f8; }
+.g-logo { width: 18px; height: 18px; flex: none; }
+#googleSlot { position: absolute; inset: 0; overflow: hidden; opacity: 0; border-radius: 14px; }
+#googleSlot > div, #googleSlot iframe { width: 100% !important; height: 52px !important; }
+.panel .or { margin: 14px 0 10px; }
 
 @media (min-width: 800px) {
   .group-grid { grid-template-columns: 1fr 1fr; }

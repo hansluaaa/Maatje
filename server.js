@@ -276,7 +276,21 @@ async function deliverVerify(config, req, user) {
   await sendMail(config, { to: user.email, subject: "Bevestig je mail voor Maatje", text });
   return { mailed: true, previewLink: "" };
 }
-function publicGroup(group) {
+function publicMember(m) {
+  return { userId: m.userId, name: m.name, icon: m.icon, color: m.color, photo: cleanAvatar(m.photo) };
+}
+function groupAccess(group) {
+  return group.access === "password" || group.access === "invite" ? group.access : "open";
+}
+function groupPasswordOk(group, password) {
+  if (!group.passwordHash || !group.passwordSalt) return false;
+  const check = hashPassword(String(password || ""), group.passwordSalt);
+  const a = Buffer.from(check.hash, "hex");
+  const b = Buffer.from(group.passwordHash, "hex");
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+function publicGroup(group, viewer) {
+  const owner = !!(viewer && viewer.id === group.ownerId);
   return {
     id: group.id,
     name: group.name,
@@ -285,9 +299,12 @@ function publicGroup(group) {
     icon: group.icon || "crown",
     color: group.color || "blue",
     age: group.age || "20-25",
+    access: groupAccess(group),
+    photo: cleanGroupPhoto(group.photo),
     activeRoom: group.activeRoom || "",
     activeRoomAt: group.activeRoomAt || 0,
-    members: (group.members || []).map((m) => ({ userId: m.userId, name: m.name, icon: m.icon, color: m.color, photo: cleanAvatar(m.photo) })),
+    pending: owner ? (group.pending || []).map(publicMember) : [],
+    members: (group.members || []).map(publicMember),
     questions: (group.questions || []).map((q) => ({ id: q.id, text: q.text, by: q.by || "" })),
     segments: (group.segments || []).map((s) => ({ id: s.id, label: s.label, text: s.text || "", sips: s.sips | 0, who: s.who || "self" })),
     evenings: (group.evenings || []).slice(-12).map((e) => ({
@@ -344,6 +361,17 @@ function issueSession(store, userId) {
 function cleanAvatar(value) {
   const url = String(value || "");
   return /^\/media\/avatars\/ava-[a-z0-9-]+\.jpg$/i.test(url) ? url : "";
+}
+function cleanGroupPhoto(value) {
+  const url = String(value || "");
+  return /^\/media\/groups\/grp-[a-z0-9-]+\.jpg$/i.test(url) ? url : "";
+}
+function removeGroupPhoto(group) {
+  const old = cleanGroupPhoto(group && group.photo);
+  if (!old) return;
+  const file = path.resolve(root, old.replace(/^\/+/, ""));
+  const dir = path.resolve(root, "media", "groups");
+  if (file.startsWith(dir + path.sep)) fs.unlink(file, () => {});
 }
 function memberFrom(user) {
   return { userId: user.id, name: user.name, icon: user.icon || "glass", color: user.color || "blue", photo: cleanAvatar(user.photo) };
@@ -501,8 +529,9 @@ async function handleApi(req, res, url) {
   }
   if (req.method === "GET" && pathName === "/api/me") {
     if (!me) { send(res, 401, { error: "Niet ingelogd" }); return; }
-    const groups = store.groups.filter((g) => (g.members || []).some((m) => m.userId === me.id)).map(publicGroup);
-    send(res, 200, { user: publicUser(me), groups });
+    const groups = store.groups.filter((g) => (g.members || []).some((m) => m.userId === me.id)).map((g) => publicGroup(g, me));
+    const requests = store.groups.filter((g) => (g.pending || []).some((p) => p.userId === me.id) && !(g.members || []).some((m) => m.userId === me.id)).map((g) => ({ id: g.id, name: g.name, code: g.code }));
+    send(res, 200, { user: publicUser(me), groups, requests });
     return;
   }
   if (req.method === "POST" && pathName === "/api/register") {
@@ -523,7 +552,7 @@ async function handleApi(req, res, url) {
       user.verifyToken = "";
       const token = issueSession(store, user.id);
       saveStore(store);
-      const groups = store.groups.filter((g) => (g.members || []).some((m) => m.userId === user.id)).map(publicGroup);
+      const groups = store.groups.filter((g) => (g.members || []).some((m) => m.userId === user.id)).map((g) => publicGroup(g, user));
       send(res, 200, { token, user: publicUser(user), groups, mailed: false });
       return;
     }
@@ -547,7 +576,7 @@ async function handleApi(req, res, url) {
     if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) throw new Error("Wachtwoord klopt niet.");
     const token = issueSession(store, user.id);
     saveStore(store);
-    const groups = store.groups.filter((g) => (g.members || []).some((m) => m.userId === user.id)).map(publicGroup);
+    const groups = store.groups.filter((g) => (g.members || []).some((m) => m.userId === user.id)).map((g) => publicGroup(g, user));
     send(res, 200, { token, user: publicUser(user), groups });
     return;
   }
@@ -569,7 +598,7 @@ async function handleApi(req, res, url) {
     user.verified = true;
     const token = issueSession(store, user.id);
     saveStore(store);
-    const groups = store.groups.filter((g) => (g.members || []).some((m) => m.userId === user.id)).map(publicGroup);
+    const groups = store.groups.filter((g) => (g.members || []).some((m) => m.userId === user.id)).map((g) => publicGroup(g, user));
     send(res, 200, { token, user: publicUser(user), groups });
     return;
   }
@@ -582,7 +611,7 @@ async function handleApi(req, res, url) {
     user.verifyToken = "";
     const session = issueSession(store, user.id);
     saveStore(store);
-    const groups = store.groups.filter((g) => (g.members || []).some((m) => m.userId === user.id)).map(publicGroup);
+    const groups = store.groups.filter((g) => (g.members || []).some((m) => m.userId === user.id)).map((g) => publicGroup(g, user));
     send(res, 200, { token: session, user: publicUser(user), groups });
     return;
   }
@@ -622,7 +651,7 @@ async function handleApi(req, res, url) {
     me.photo = "/media/avatars/ava-" + safe + ".jpg";
     syncMember(store, me);
     saveStore(store);
-    const groups = store.groups.filter((g) => (g.members || []).some((m) => m.userId === me.id)).map(publicGroup);
+    const groups = store.groups.filter((g) => (g.members || []).some((m) => m.userId === me.id)).map((g) => publicGroup(g, me));
     send(res, 200, { photo: me.photo, user: publicUser(me), groups });
     return;
   }
@@ -648,7 +677,7 @@ async function handleApi(req, res, url) {
     }
     syncMember(store, me);
     saveStore(store);
-    const groups = store.groups.filter((g) => (g.members || []).some((m) => m.userId === me.id)).map(publicGroup);
+    const groups = store.groups.filter((g) => (g.members || []).some((m) => m.userId === me.id)).map((g) => publicGroup(g, me));
     send(res, 200, { user: publicUser(me), groups });
     return;
   }
@@ -666,6 +695,8 @@ async function handleApi(req, res, url) {
       age: me.age || "20-25",
       activeRoom: "",
       activeRoomAt: 0,
+      access: "open",
+      pending: [],
       members: [memberFrom(me)],
       questions: [],
       segments: [],
@@ -674,7 +705,7 @@ async function handleApi(req, res, url) {
     };
     store.groups.push(group);
     saveStore(store);
-    send(res, 200, { group: publicGroup(group) });
+    send(res, 200, { group: publicGroup(group, me) });
     return;
   }
   if (req.method === "POST" && pathName === "/api/groups/join") {
@@ -682,10 +713,29 @@ async function handleApi(req, res, url) {
     const code = String(body.code || "").toUpperCase().replace(/[^A-Z2-9]/g, "").slice(0, 4);
     const group = store.groups.find((g) => g.code === code);
     if (!group) throw new Error("Geen groep met die code.");
-    if (!(group.members || []).some((m) => m.userId === me.id)) group.members.push(memberFrom(me));
-    if ((group.members || []).length > 24) throw new Error("Deze groep zit vol.");
+    const already = (group.members || []).some((m) => m.userId === me.id);
+    if (already) { send(res, 200, { group: publicGroup(group, me) }); return; }
+    if ((group.members || []).length >= 24) throw new Error("Deze groep zit vol.");
+    const access = groupAccess(group);
+    if (access === "password" && !groupPasswordOk(group, body.password)) {
+      send(res, 400, { error: body.password ? "Wachtwoord klopt niet." : "Deze groep heeft een wachtwoord.", need: "password" });
+      return;
+    }
+    if (access === "invite") {
+      group.pending = group.pending || [];
+      if (!group.pending.some((p) => p.userId === me.id)) {
+        if (group.pending.length >= 24) throw new Error("Er staan al te veel aanvragen.");
+        group.pending.push(memberFrom(me));
+      }
+      saveStore(store);
+      send(res, 200, { pending: true, request: { id: group.id, name: group.name, code: group.code } });
+      return;
+    }
+    group.members = group.members || [];
+    group.members.push(memberFrom(me));
+    group.pending = (group.pending || []).filter((p) => p.userId !== me.id);
     saveStore(store);
-    send(res, 200, { group: publicGroup(group) });
+    send(res, 200, { group: publicGroup(group, me) });
     return;
   }
 
@@ -701,7 +751,7 @@ async function handleApi(req, res, url) {
     group.activeRoom = String(body.code || "").toUpperCase().replace(/[^A-Z2-9]/g, "").slice(0, 4);
     group.activeRoomAt = Date.now();
     saveStore(store);
-    send(res, 200, { group: publicGroup(group) });
+    send(res, 200, { group: publicGroup(group, me) });
     return;
   }
   if (segmentMatch && req.method === "POST") {
@@ -720,7 +770,7 @@ async function handleApi(req, res, url) {
       group.segments.push({ id: "s" + crypto.randomBytes(3).toString("hex"), label, text, who, sips: Math.max(0, Math.min(4, body.sips | 0)) });
     }
     saveStore(store);
-    send(res, 200, { group: publicGroup(group) });
+    send(res, 200, { group: publicGroup(group, me) });
     return;
   }
   if (eveningMatch && req.method === "POST") {
@@ -741,7 +791,7 @@ async function handleApi(req, res, url) {
     });
     group.evenings = group.evenings.slice(-20);
     saveStore(store);
-    send(res, 200, { group: publicGroup(group) });
+    send(res, 200, { group: publicGroup(group, me) });
     return;
   }
   if (questionMatch && req.method === "POST") {
@@ -754,7 +804,7 @@ async function handleApi(req, res, url) {
     if (group.questions.length >= 40) throw new Error("Deze groep heeft al 40 eigen vragen.");
     group.questions.push({ id: "g" + crypto.randomBytes(4).toString("hex"), text, by: me.name });
     saveStore(store);
-    send(res, 200, { group: publicGroup(group) });
+    send(res, 200, { group: publicGroup(group, me) });
     return;
   }
   if (oneMatch && req.method === "PATCH") {
@@ -767,16 +817,77 @@ async function handleApi(req, res, url) {
       if (name.length < 2) throw new Error("Naam is te kort.");
       group.name = name;
     }
+    if (body.access) {
+      const access = groupAccess({ access: body.access });
+      if (!["open", "password", "invite"].includes(String(body.access))) throw new Error("Kies open, wachtwoord of uitnodiging.");
+      if (body.access === "password") {
+        const password = String(body.password || "");
+        if (password) {
+          if (password.length < 4) throw new Error("Kies een wachtwoord van minstens 4 tekens.");
+          const pw = hashPassword(password);
+          group.passwordHash = pw.hash;
+          group.passwordSalt = pw.salt;
+        } else if (!group.passwordHash) throw new Error("Kies eerst een wachtwoord.");
+        group.access = "password";
+      } else {
+        group.access = access === "invite" ? "invite" : "open";
+        group.passwordHash = "";
+        group.passwordSalt = "";
+      }
+    }
+    if (body.photo === "") {
+      removeGroupPhoto(group);
+      group.photo = "";
+    }
     saveStore(store);
-    send(res, 200, { group: publicGroup(group) });
+    send(res, 200, { group: publicGroup(group, me) });
+    return;
+  }
+  const askMatch = /^\/api\/groups\/([^/]+)\/requests$/.exec(pathName);
+  if (askMatch && req.method === "POST") {
+    const group = store.groups.find((g) => g.id === askMatch[1]);
+    if (!group || group.ownerId !== me.id) throw new Error("Alleen de host laat mensen toe.");
+    const body = await readBody(req);
+    const userId = String(body.userId || "");
+    const person = (group.pending || []).find((p) => p.userId === userId);
+    if (!person) throw new Error("Die aanvraag is er niet meer.");
+    if (body.accept && !(group.members || []).some((m) => m.userId === userId)) {
+      if ((group.members || []).length >= 24) throw new Error("Deze groep zit vol.");
+      group.members = group.members || [];
+      group.members.push(person);
+    }
+    group.pending = (group.pending || []).filter((p) => p.userId !== userId);
+    saveStore(store);
+    send(res, 200, { group: publicGroup(group, me) });
+    return;
+  }
+  const photoMatch = /^\/api\/groups\/([^/]+)\/photo$/.exec(pathName);
+  if (photoMatch && req.method === "POST") {
+    const group = store.groups.find((g) => g.id === photoMatch[1]);
+    if (!group || group.ownerId !== me.id) throw new Error("Alleen de host zet de groepsfoto.");
+    const raw = await readRaw(req, 2 * 1024 * 1024, "Foto is te groot.");
+    let body = {};
+    try { body = JSON.parse(raw.toString("utf8")); } catch (e) { throw new Error("Upload mislukt."); }
+    const buf = Buffer.from(String(body.data || ""), "base64");
+    const isJpeg = buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+    if (!isJpeg || buf.length < 100 || buf.length > 400000) throw new Error("Alleen een jpg-foto, niet te groot.");
+    const safe = String(group.id).replace(/[^a-z0-9-]/gi, "").slice(0, 40);
+    const dir = path.join(root, "media", "groups");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "grp-" + safe + ".jpg"), buf);
+    group.photo = "/media/groups/grp-" + safe + ".jpg";
+    saveStore(store);
+    send(res, 200, { group: publicGroup(group, me), photo: group.photo });
     return;
   }
   if (oneMatch && req.method === "POST") {
     const group = store.groups.find((g) => g.id === oneMatch[1]);
     if (!group) throw new Error("Groep niet gevonden.");
     group.members = (group.members || []).filter((m) => m.userId !== me.id);
-    if (!group.members.length) store.groups = store.groups.filter((g) => g.id !== group.id);
-    else if (group.ownerId === me.id) group.ownerId = group.members[0].userId;
+    if (!group.members.length) {
+      removeGroupPhoto(group);
+      store.groups = store.groups.filter((g) => g.id !== group.id);
+    } else if (group.ownerId === me.id) group.ownerId = group.members[0].userId;
     saveStore(store);
     send(res, 200, { ok: true });
     return;
@@ -784,4 +895,19 @@ async function handleApi(req, res, url) {
   send(res, 404, { error: "Niet gevonden" });
 }
 
-server.listen(port, "0.0.0.0");
+server.on("clientError", (err, socket) => {
+  try { socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"); } catch (e) {}
+});
+function listen(host) {
+  server.once("error", (err) => {
+    if (host === "::") { listen("0.0.0.0"); return; }
+    if (err && err.code === "EADDRINUSE") {
+      console.error("Poort " + port + " is al in gebruik. Sluit het andere Maatje-venster en start opnieuw.");
+    } else {
+      console.error(err && err.message ? err.message : err);
+    }
+    process.exit(1);
+  });
+  server.listen(host === "::" ? { port, host, ipv6Only: false } : { port, host });
+}
+listen("::");
